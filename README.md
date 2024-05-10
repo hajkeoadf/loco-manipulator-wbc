@@ -28,6 +28,7 @@ Paper: https://arxiv.org/abs/2109.11978
 3. Install Isaac Gym
    - Download and install Isaac Gym Preview 3 (Preview 2 will not work!) from https://developer.nvidia.com/isaac-gym
    - `cd isaacgym/python && pip install -e .`
+   - Adapt to latest numpy`sed -i 's/np.float/float/' isaacgym/torch_utils.py`
    - Try running an example `cd examples && python 1080_balls_of_solitude.py`
    - For troubleshooting check docs `isaacgym/docs/index.html`)
 4. Install rsl_rl (PPO implementation)
@@ -36,6 +37,10 @@ Paper: https://arxiv.org/abs/2109.11978
 5. Install legged_gym
     - Clone this repository
    - `cd legged_gym && pip install -e .`
+6. Install tensorboard
+   - `pip install tensorboard`
+7. Install setuptools 
+   - `pip install setuptools==59.5.0`
 
 ### CODE STRUCTURE ###
 1. Each environment is defined by an env file (`legged_robot.py`) and a config file (`legged_robot_config.py`). The config file contains two classes: one containing  all the environment parameters (`LeggedRobotCfg`) and one for the training parameters (`LeggedRobotCfgPPo`).  
@@ -45,7 +50,7 @@ Paper: https://arxiv.org/abs/2109.11978
 
 ### Usage ###
 1. Train:  
-  ```python legged_gym/scripts/train.py --task=anymal_c_flat```
+  ```python legged_gym/scripts/train.py --task=pointfoot_rough```
     -  To run on CPU add following arguments: `--sim_device=cpu`, `--rl_device=cpu` (sim on CPU and rl on GPU is possible).
     -  To run headless (no rendering) add `--headless`.
     - **Important**: To improve performance, once the training starts press `v` to stop the rendering. You can then enable it later to check the progress.
@@ -61,7 +66,11 @@ Paper: https://arxiv.org/abs/2109.11978
      - --seed SEED:  Random seed.
      - --max_iterations MAX_ITERATIONS:  Maximum number of training iterations.
 2. Play a trained policy:  
-```python legged_gym/scripts/play.py --task=anymal_c_flat```
+```python legged_gym/scripts/play.py --task=pointfoot_flat```
+    - By default, the loaded policy is the last model of the last run of the experiment folder.
+    - Other runs/model iteration can be selected by setting `load_run` and `checkpoint` in the train config.
+3. Export policy as an ONNX file:  
+```python legged_gym/scripts/export_policy_as_onnx.py --task=pointfoot_flat```
     - By default, the loaded policy is the last model of the last run of the experiment folder.
     - Other runs/model iteration can be selected by setting `load_run` and `checkpoint` in the train config.
 
