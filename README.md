@@ -54,7 +54,7 @@ Paper: https://arxiv.org/abs/2109.11978
     -  To run on CPU add following arguments: `--sim_device=cpu`, `--rl_device=cpu` (sim on CPU and rl on GPU is possible).
     -  To run headless (no rendering) add `--headless`.
     - **Important**: To improve performance, once the training starts press `v` to stop the rendering. You can then enable it later to check the progress.
-    - The trained policy is saved in `issacgym_anymal/logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`. Where `<experiment_name>` and `<run_name>` are defined in the train config.
+    - The trained policy is saved in `logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`. Where `<experiment_name>` and `<run_name>` are defined in the train config.
     -  The following command line arguments override the values set in the config files:
      - --task TASK: Task name.
      - --resume:   Resume training from a checkpoint
@@ -66,13 +66,14 @@ Paper: https://arxiv.org/abs/2109.11978
      - --seed SEED:  Random seed.
      - --max_iterations MAX_ITERATIONS:  Maximum number of training iterations.
 2. Play a trained policy:  
-```python legged_gym/scripts/play.py --task=pointfoot_flat```
+```python legged_gym/scripts/play.py --task=pointfoot_rough --load_run <run_name> --checkpoint <checkpoint>```
     - By default, the loaded policy is the last model of the last run of the experiment folder.
     - Other runs/model iteration can be selected by setting `load_run` and `checkpoint` in the train config.
 3. Export policy as an ONNX file:  
 ```python legged_gym/scripts/export_policy_as_onnx.py --task=pointfoot_flat```
     - By default, the loaded policy is the last model of the last run of the experiment folder.
     - Other runs/model iteration can be selected by setting `load_run` and `checkpoint` in the train config.
+    - The exported onnx file is saved in `logs/<experiment_name>/export/policy.pt`.
 
 ### Adding a new environment ###
 The base environment `legged_robot` implements a rough terrain locomotion task. The corresponding cfg does not specify a robot asset (URDF/ MJCF) and has no reward scales. 
@@ -83,7 +84,7 @@ The base environment `legged_robot` implements a rough terrain locomotion task. 
     - In `cfg` set the asset path, define body names, default_joint_positions and PD gains. Specify the desired `train_cfg` and the name of the environment (python class).
     - In `train_cfg` set `experiment_name` and `run_name`
 3. (If needed) implement your environment in <your_env>.py, inherit from an existing environment, overwrite the desired functions and/or add your reward functions.
-4. Register your env in `isaacgym_anymal/envs/__init__.py`.
+4. Register your env in `legged_gym/envs/__init__.py`.
 5. Modify/Tune other parameters in your `cfg`, `cfg_train` as needed. To remove a reward set its scale to zero. Do not modify parameters of other envs!
 
 
