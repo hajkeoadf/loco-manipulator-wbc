@@ -1,5 +1,7 @@
 #!/bin/bash
 
+reboot_needed=0
+
 # bash fonts colors
 red='\e[31m'
 yellow='\e[33m'
@@ -124,6 +126,8 @@ install_nvidia_driver() {
     sudo bash -c "echo blacklist nouveau > /etc/modprobe.d/blacklist-nouveau.conf"
     sudo bash -c "echo options nouveau modeset=0 >> /etc/modprobe.d/blacklist-nouveau.conf"
     sudo update-initramfs -u
+
+    reboot_needed=1
 }
 
 conda_activate_pointfoot_legged_gym() {
@@ -312,3 +316,12 @@ install_pytorch
 install_isaac_gym
 
 install_pointfoot_legged_gym
+
+if [ $reboot_needed -eq 1 ]; then
+    read -p "安装完成需要重启才能生效，是否现在重启系统？(y/n): " answer
+    if [[ $answer =~ ^[Yy]$ ]]; then
+        sudo reboot
+    else
+        echo "请稍后手动重启系统。"
+    fi
+fi
