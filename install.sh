@@ -70,7 +70,7 @@ install_basic_tools() {
     check_err "${yellow}更新软件包列表失败"
 
     # Install Python, pip, wget
-    sudo apt install -y python3 python3-pip wget
+    sudo apt install -y python3 python3-pip wget git
     check_err "${yellow}安装Python, pip, wget失败"
 
     # Call the function
