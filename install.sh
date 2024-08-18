@@ -71,7 +71,7 @@ install_basic_tools() {
 
     # Install Python, pip, wget, git
     sudo apt install -y python3 python3-pip wget git
-    check_err "${yellow}安装Python, pip, wget失败"
+    check_err "${yellow}安装Python, pip, wget, git失败"
 
     # Call the function
     configure_pip_source
