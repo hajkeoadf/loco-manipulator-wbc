@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<robot name="PF_P441A">
+<robot name="point_foot">
     <material name="black">
         <color rgba="0.0 0.0 0.0 1.0"/>
     </material>

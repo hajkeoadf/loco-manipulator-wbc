@@ -95,8 +95,16 @@ class PointFootRoughCfg(BaseConfig):
         decimation = 4
 
     class asset:
-        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/PF_P441A/urdf/PF_P441A.urdf'
-        name = "PF_P441A"
+        import os
+        import sys
+        robot_type = os.getenv("ROBOT_TYPE")
+
+        # Check if the ROBOT_TYPE environment variable is set, otherwise exit with an error
+        if not robot_type:
+            print("Error: Please set the ROBOT_TYPE using 'export ROBOT_TYPE=<robot_type>'.")
+            sys.exit(1)
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/pointfoot/' + robot_type + '/urdf/robot.urdf'
+        name = robot_type
         foot_name = 'foot'
         terminate_after_contacts_on = ["abad", "base"]
         penalize_contacts_on = ["base", "abad", "hip", "knee"]
