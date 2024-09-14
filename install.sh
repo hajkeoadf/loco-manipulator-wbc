@@ -165,20 +165,19 @@ install_anaconda() {
     local installer_file="$HOME/$(basename $anaconda_url)"
     local anaconda_dir="$HOME/anaconda3"
 
-    if [[ ! -f "$installer_file" ]]; then
-        # Download Anaconda installer
-        info "${yellow}下载 Anaconda 安装脚本..."
-        cd ~
-        wget "$anaconda_url"
-        check_err "${yellow}下载 Anaconda 安装脚本失败"
-    fi
+    rm -rf "$installer_file"
 
-    if [[ ! -f "$anaconda_dir/bin/conda" ]]; then
-        # Run the installer
-        info "${yellow}运行 Anaconda 安装脚本..."
-        bash "$installer_file"
-        check_err "${yellow}运行 Anaconda 安装脚本"
-    fi
+    rm -rf "$anaconda_dir"
+
+    # Download Anaconda installer
+    info "${yellow}下载 Anaconda 安装脚本..."
+    cd ~ && wget "$anaconda_url"
+    check_err "${yellow}下载 Anaconda 安装脚本失败"
+
+    # Run the installer
+    info "${yellow}运行 Anaconda 安装脚本..."
+    bash "$installer_file"
+    check_err "${yellow}运行 Anaconda 安装脚本"
 
     # Initialize Conda if not automatically configured
     info "${yellow}初始化 Conda 环境..."
