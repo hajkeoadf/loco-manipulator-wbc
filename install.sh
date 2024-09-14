@@ -167,8 +167,6 @@ install_anaconda() {
 
     rm -rf "$installer_file"
 
-    rm -rf "$anaconda_dir"
-
     # Download Anaconda installer
     info "${yellow}下载 Anaconda 安装脚本..."
     cd ~ && wget "$anaconda_url"
