@@ -110,7 +110,7 @@ class PointFootFlatCfg(PointFootRoughCfg):
             tracking_lin_vel = 10.0
             unbalance_feet_air_time = 0.0 # off
             unbalance_feet_height = 0.0 # off
-            feet_distance = -100
+            feet_distance = 5 # -100
             survival = 0.1
             # new added
             wheel_adjustment = 1.0 # 1.0 off

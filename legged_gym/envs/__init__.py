@@ -53,18 +53,21 @@ task_registry.register("anymal_b", Anymal, AnymalBRoughCfg(), AnymalBRoughCfgPPO
 task_registry.register("a1", LeggedRobot, A1RoughCfg(), A1RoughCfgPPO())
 task_registry.register("cassie", Cassie, CassieRoughCfg(), CassieRoughCfgPPO())
 if robot_type.startswith("PF"):
-    from .pointfoot.PF.point_foot import PointFoot
+    from .pointfoot.PF.pointfoot import PointFoot
     from legged_gym.envs.pointfoot.mixed_terrain.pointfoot_rough_config import PointFootRoughCfg, PointFootRoughCfgPPO
     from legged_gym.envs.pointfoot.flat.PF.pointfoot_flat_config import PointFootFlatCfg, PointFootFlatCfgPPO
     task_registry.register("pointfoot_rough", PointFoot, PointFootRoughCfg(), PointFootRoughCfgPPO())
     task_registry.register("pointfoot_flat", PointFoot, PointFootFlatCfg(), PointFootFlatCfgPPO())
 elif robot_type.startswith("WF"):
-    from .pointfoot.WF.point_foot import PointFoot
+    from .pointfoot.WF.pointfoot import PointFoot
     from legged_gym.envs.pointfoot.mixed_terrain.pointfoot_rough_config import PointFootRoughCfg, PointFootRoughCfgPPO
     from legged_gym.envs.pointfoot.flat.WF.pointfoot_flat_config import PointFootFlatCfg, PointFootFlatCfgPPO
     task_registry.register("pointfoot_flat", PointFoot, PointFootFlatCfg(), PointFootFlatCfgPPO())
 elif robot_type.startswith("SF"):
-    pass
+    from .pointfoot.SF.pointfoot import PointFoot
+    from legged_gym.envs.pointfoot.mixed_terrain.pointfoot_rough_config import PointFootRoughCfg, PointFootRoughCfgPPO
+    from legged_gym.envs.pointfoot.flat.SF.pointfoot_flat_config import PointFootFlatCfg, PointFootFlatCfgPPO
+    task_registry.register("pointfoot_flat", PointFoot, PointFootFlatCfg(), PointFootFlatCfgPPO())
 else:
     print("Error: Unknown robot type", robot_type)
     sys.exit(1)

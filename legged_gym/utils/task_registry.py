@@ -33,6 +33,9 @@ from datetime import datetime
 from typing import Tuple
 import torch
 import numpy as np
+import json
+import ntpath
+from shutil import copyfile
 
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
@@ -142,6 +145,7 @@ class TaskRegistry():
             log_dir = None
         else:
             log_dir = os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
+        self.log_dir = log_dir
         
         train_cfg_dict = class_to_dict(train_cfg)
         runner = OnPolicyRunner(env, train_cfg_dict, log_dir, device=args.rl_device)
@@ -154,5 +158,17 @@ class TaskRegistry():
             runner.load(resume_path)
         return runner, train_cfg
 
+    def save_cfgs(self, name):
+        os.mkdir(self.log_dir)
+        robot_type = os.getenv("ROBOT_TYPE").split('_')[0]
+        task_type, terrain_type = name.split('_')[0], name.split('_')[1]
+        save_items = [
+            LEGGED_GYM_ENVS_DIR + "/{}/{}/{}/".format(task_type, terrain_type, robot_type) + "{}_config.py".format(name),
+            LEGGED_GYM_ENVS_DIR + "/{}/{}/".format(task_type, robot_type) + "{}.py".format(task_type),
+        ]
+        if save_items is not None:
+            for save_item in save_items:
+                base_file_name = ntpath.basename(save_item)
+                copyfile(save_item, self.log_dir + "/" + base_file_name)
 # make global task registry
 task_registry = TaskRegistry()
