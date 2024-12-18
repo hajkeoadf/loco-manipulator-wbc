@@ -159,7 +159,8 @@ class TaskRegistry():
         return runner, train_cfg
 
     def save_cfgs(self, name):
-        os.mkdir(self.log_dir)
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
         robot_type = os.getenv("ROBOT_TYPE").split('_')[0]
         task_type, terrain_type = name.split('_')[0], name.split('_')[1]
         save_items = [
