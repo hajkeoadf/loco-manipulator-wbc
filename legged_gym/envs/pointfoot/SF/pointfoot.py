@@ -1402,7 +1402,8 @@ class PointFoot:
         feet_distance = torch.norm(
             self.foot_positions[:, 0, :2] - self.foot_positions[:, 1, :2], dim=-1
         )
-        return torch.clip(self.cfg.rewards.min_feet_distance - feet_distance, 0, 1)
+        reward = torch.clip(self.cfg.rewards.min_feet_distance - feet_distance, 0, 1)
+        return reward
 
     def _reward_feet_regulation(self):
         feet_height = self.cfg.rewards.base_height_target * 0.025
@@ -1502,8 +1503,8 @@ class PointFoot:
     def _reward_base_height(self):
         # Penalize base height away from target
         base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
-        # return torch.square(base_height - self.cfg.rewards.base_height_target)
-        return torch.abs(base_height - self.cfg.rewards.base_height_target)
+        return torch.clip(self.cfg.rewards.base_height_target_min - base_height, 0, 1) + \
+            torch.clip(base_height - self.cfg.rewards.base_height_target_max, 0, 1)
     
     def _reward_stand_still(self):
         # Penalize motion at zero commands

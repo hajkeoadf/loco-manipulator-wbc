@@ -19,13 +19,13 @@ class PointFootFlatCfg(PointFootRoughCfg):
         class ranges(PointFootRoughCfg.commands.ranges):
             lin_vel_x = [-1.0, 1.0]  # min max [m/s]
             heading = [0.0, 0.0]
-            lin_vel_y = [-1.0, 1.0] # [-1.0, 1.0]
+            lin_vel_y = [-0.5, 0.5]
             ang_vel_yaw = [-0.5, 0.5]
 
     class init_state(PointFootRoughCfg.init_state):
         # pos = [0.0, 0.0, 0.8] # origin
         pos = [0.0, 0.0, 0.7 + 0.1664] # [0.0, 0.0, 0.7 + 0.1664]  # x,y,z [m]
-        rot = [0.0, -0.1, 0.0, 1.0]  # x,y,z,w [quat]
+        rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
         default_joint_angles = {  # target angles when action = 0.0
@@ -118,7 +118,7 @@ class PointFootFlatCfg(PointFootRoughCfg):
             dof_pos_limits = -2.0
             collision = -10
             action_smooth = -0.01
-            orientation = -5.0
+            orientation = -20
             feet_distance = -200
             feet_regulation = -0.05
             tracking_contacts_shaped_force = -2.0 * 0 # off
@@ -139,9 +139,11 @@ class PointFootFlatCfg(PointFootRoughCfg):
         )
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 0.8
-        base_height_target = 0.56
+        base_height_target_min = 0.56
+        base_height_target_max = 0.75
         feet_height_target = 0.10
         min_feet_distance = 0.19
+        max_feet_distance = 0.23
         max_contact_force = 100.0  # forces above this value are penalized
         kappa_gait_probs = 0.05
         gait_force_sigma = 25.0
@@ -155,7 +157,10 @@ class PointFootFlatCfgPPO(PointFootRoughCfgPPO):
     class policy(PointFootRoughCfgPPO.policy):
         actor_hidden_dims = [128, 64, 32] # [256, 128, 64, 32]
         critic_hidden_dims = [128, 64, 32] # [256, 128, 64, 32]
-
+    class algorithm(PointFootRoughCfgPPO.algorithm):
+        num_mini_batches = 4  # mini batch size = num_envs*nsteps / nminibatches
+        learning_rate = 5.e-4
     class runner(PointFootRoughCfgPPO.runner):
         experiment_name = 'pointfoot_flat'
         max_iterations = 10000
+        save_interval = 200
