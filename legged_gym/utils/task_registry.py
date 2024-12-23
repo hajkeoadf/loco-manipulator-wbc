@@ -168,8 +168,11 @@ class TaskRegistry():
             LEGGED_GYM_ENVS_DIR + "/{}/{}/".format(task_type, robot_type) + "{}.py".format(task_type),
         ]
         if save_items is not None:
-            for save_item in save_items:
-                base_file_name = ntpath.basename(save_item)
-                copyfile(save_item, self.log_dir + "/" + base_file_name)
+            try:
+                for save_item in save_items:
+                    base_file_name = ntpath.basename(save_item)
+                    copyfile(save_item, self.log_dir + "/" + base_file_name)
+            except FileNotFoundError:
+                pass
 # make global task registry
 task_registry = TaskRegistry()
