@@ -729,11 +729,10 @@ class PointFoot:
         self.add_noise = self.cfg.noise.add_noise
         noise_scales = self.cfg.noise.noise_scales
         noise_level = self.cfg.noise.noise_level
-        obs_noise_vec[:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel
-        obs_noise_vec[3:6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
-        obs_noise_vec[6:9] = noise_scales.gravity * noise_level
-        command_end_idx = 9 + self.cfg.commands.num_commands
-        obs_noise_vec[9:command_end_idx] = 0.  # commands
+        obs_noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        obs_noise_vec[3:6] = noise_scales.gravity * noise_level
+        command_end_idx = 6 + self.cfg.commands.num_commands
+        obs_noise_vec[6:command_end_idx] = 0.  # commands
         dof_pos_end_idx = command_end_idx + self.num_dof
         obs_noise_vec[command_end_idx:dof_pos_end_idx] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
         dof_vel_end_idx = dof_pos_end_idx + self.num_dof

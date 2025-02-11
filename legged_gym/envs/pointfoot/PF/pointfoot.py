@@ -628,11 +628,10 @@ class PointFoot:
         self.add_noise = self.cfg.noise.add_noise
         noise_scales = self.cfg.noise.noise_scales
         noise_level = self.cfg.noise.noise_level
-        obs_noise_vec[:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel
-        obs_noise_vec[3:6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
-        obs_noise_vec[6:9] = noise_scales.gravity * noise_level
-        command_end_idx = 9 + self.cfg.commands.num_commands
-        obs_noise_vec[9:command_end_idx] = 0.  # commands
+        obs_noise_vec[:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        obs_noise_vec[3:6] = noise_scales.gravity * noise_level
+        command_end_idx = 6 + self.cfg.commands.num_commands
+        obs_noise_vec[6:command_end_idx] = 0.  # commands
         dof_pos_end_idx = command_end_idx + self.num_dof
         obs_noise_vec[command_end_idx:dof_pos_end_idx] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
         dof_vel_end_idx = dof_pos_end_idx + self.num_dof
@@ -1195,8 +1194,8 @@ class PointFoot:
 
     def _reward_stand_still(self):
         # Penalize displacement and rotation at zero commands
-        reward_lin = torch.abs(self.base_lin_vel[:, :2]) * (self.commands[:, :2] < 0.1)
-        reward_ang = (torch.abs(self.base_ang_vel[:, -1]) * (self.commands[:, 2] < 0.1)).unsqueeze(dim=-1)
+        reward_lin = torch.abs(self.base_lin_vel[:, :2]) * (torch.abs(self.commands[:, :2] < 0.1))
+        reward_ang = (torch.abs(self.base_ang_vel[:, -1]) * (torch.abs(self.commands[:, 2] < 0.1))).unsqueeze(dim=-1)
         return torch.sum(torch.cat((reward_lin, reward_ang), dim=-1), dim=-1)
 
     def _reward_feet_contact_forces(self):
