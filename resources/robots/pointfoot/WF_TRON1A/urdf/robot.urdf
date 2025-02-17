@@ -82,7 +82,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/base_Link.STL"/>
+                        filename="../meshes/base_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -141,7 +141,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/abad_L_Link.STL"/>
+                        filename="../meshes/abad_L_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -184,7 +184,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/hip_L_Link.STL"/>
+                        filename="../meshes/hip_L_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -227,7 +227,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/knee_L_Link.STL"/>
+                        filename="../meshes/knee_L_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -270,7 +270,7 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://robot_description/pointfoot/WF_TRON1A/meshes/wheel_L_Link.STL" />
+                <mesh filename="../meshes/wheel_L_Link.STL" />
             </geometry>
             <material name="orange" />
             <color rgba="0.69804 0.69804 0.69804 1" />
@@ -366,7 +366,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/abad_R_Link.STL"/>
+                        filename="../meshes/abad_R_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -409,7 +409,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/hip_R_Link.STL"/>
+                        filename="../meshes/hip_R_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -452,7 +452,7 @@
                     rpy="0 0 0"/>
             <geometry>
                 <mesh
-                        filename="package://robot_description/pointfoot/WF_TRON1A/meshes/knee_R_Link.STL"/>
+                        filename="../meshes/knee_R_Link.STL"/>
             </geometry>
             <material
                     name="">
@@ -495,7 +495,7 @@
         <visual>
             <origin rpy="0 0 0" xyz="0 0 0" />
             <geometry>
-                <mesh filename="package://robot_description/pointfoot/WF_TRON1A/meshes/wheel_R_Link.STL" />
+                <mesh filename="../meshes/wheel_R_Link.STL" />
             </geometry>
             <material name="orange" />
             <color rgba="0.69804 0.69804 0.69804 1" />
