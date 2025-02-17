@@ -51,7 +51,10 @@ class PointFootRoughCfg(BaseConfig):
             heading = [-3.14, 3.14]
 
     class init_state:
-        pos = [0.0, 0.0, 0.62]  # x,y,z [m]
+        import os
+        robot_type = os.getenv("ROBOT_TYPE")
+        base_height_target = 0.62 + 0.165 if robot_type == 'PF_TRON1A' else 0.62
+        pos = [0.0, 0.0, base_height_target]  # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
@@ -161,7 +164,9 @@ class PointFootRoughCfg(BaseConfig):
             feet_distance = -100
             survival = 100
 
-        base_height_target = 0.62
+        import os
+        robot_type = os.getenv("ROBOT_TYPE")
+        base_height_target = 0.62 + 0.165 if robot_type == 'PF_TRON1A' else 0.62
         soft_dof_pos_limit = 0.95  # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 0.9
         soft_torque_limit = 0.8
