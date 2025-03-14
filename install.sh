@@ -271,23 +271,9 @@ install_pointfoot_legged_gym() {
 
     local conda_env="pointfoot_legged_gym"
     local rl_dir="$HOME/limx_rl"
-    local rsl_rl_repo="https://github.com/leggedrobotics/rsl_rl"
-    local rsl_rl_version="v1.0.2"
     local pointfoot_repo="https://github.com/limxdynamics/pointfoot-legged-gym.git"
 
     mkdir -p "$rl_dir"
-
-    # Install rsl_rl
-    info "${yellow}安装 rsl_rl 库 ..."
-    cd "$rl_dir"
-    if [ ! -d "$rl_dir/rsl_rl" ]; then
-        git clone "$rsl_rl_repo"
-        check_err "${yellow}下载 rsl_rl 库失败"
-    fi
-    cd "$rl_dir/rsl_rl"
-    git checkout "$rsl_rl_version"
-    pip install -e .
-    check_err "${yellow}安装 rsl_rl 库失败"
 
     # Install pointfoot-legged-gym
     info "${yellow}安装 pointfoot-legged-gym 库 ..."
