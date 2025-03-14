@@ -4,7 +4,7 @@ import os
 import isaacgym
 from legged_gym.envs import *
 from legged_gym.utils import get_args, export_policy_as_jit, task_registry, Logger, get_load_path, class_to_dict
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent
+from rsl_rl.rsl_rl.modules import ActorCritic, ActorCriticRecurrent
 
 import numpy as np
 import torch
