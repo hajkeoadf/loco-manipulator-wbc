@@ -861,12 +861,20 @@ class BaseTask:
             env_ids (List[int]): ids of environments being reset
         """
         if self.cfg.terrain.curriculum and len(self.success_ids) != 0:
-            mask = (
-                self.episode_sums["tracking_lin_vel"][self.success_ids]
+            if "tracking_lin_vel" in self.episode_sums.keys():
+                mask = (
+                    self.episode_sums["tracking_lin_vel"][self.success_ids]
+                    / self.max_episode_length
+                    > self.cfg.commands.curriculum_threshold
+                    * self.reward_scales["tracking_lin_vel"]
+                )
+            elif "tracking_lin_vel_x" in self.episode_sums.keys():
+                mask = (
+                self.episode_sums["tracking_lin_vel_x"][self.success_ids]
                 / self.max_episode_length
                 > self.cfg.commands.curriculum_threshold
-                * self.reward_scales["tracking_lin_vel"]
-            )
+                * self.reward_scales["tracking_lin_vel_x"]
+                )
             success_ids = self.success_ids[mask]
             slope_ids = torch.any(
                 success_ids.unsqueeze(1) == self.smooth_slope_idx.unsqueeze(0), dim=1

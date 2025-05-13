@@ -33,14 +33,14 @@ from legged_gym.envs.base.base_config import BaseConfig
 class BipedCfgSF(BaseConfig):
     class env:
         num_envs = 8192
-        num_privileged_group = 0 # 4096
-        num_proprio_group = num_envs - num_privileged_group
+        # num_privileged_group = 0 # 4096
+        # num_proprio_group = num_envs - num_privileged_group
         num_observations = 36  # note: only proprioceptive observations with last action, does not include command and gait
         num_critic_observations = 3 + num_observations # add lin_vel to the front
         num_height_samples = 117
-        num_privileged_obs = (
-            num_observations + 3 + 12 + num_height_samples + 6 + 20 + 6
-        )  # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise
+        # num_privileged_obs = (
+            # num_observations + 3 + 12 + num_height_samples + 6 + 20 + 6
+        # )  # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise
         num_actions = 8
         env_spacing = 3.0  # not used with heightfields/trimeshes
         send_timeouts = True  # send time out information to the algorithm
@@ -104,20 +104,20 @@ class BipedCfgSF(BaseConfig):
         non_smooth_max_lin_vel_y = 1.0
         max_ang_vel_yaw = 3.0
         curriculum_threshold = 0.75
-        num_commands = 3 # + 2  # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
+        num_commands = 3 + 2  # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 5.0  # time before command are changed[s]
         heading_command = False  # if true: compute ang vel command from heading error, only work on adaptive group
         min_norm = 0.1
         zero_command_prob = 0.8
 
         class ranges:
-            lin_vel_x = [-1.5, 1.5]  # min max [m/s]
+            lin_vel_x = [-1.0, 1.5]  # min max [m/s]
             lin_vel_y = [-1.0, 1.0]  # min max [m/s]
             # lin_vel_x = [-1.7, 1.7]  # min max [m/s]
             # lin_vel_y = [-1.7, 1.7]  # min max [m/s]
-            ang_vel_yaw = [-0.8, 0.8]  # min max [rad/s]
+            ang_vel_yaw = [-1, 1]  # min max [rad/s]
             heading = [-3.14159, 3.14159]
-            base_height = [0.30 + 0.1664, 0.70 + 0.1664]
+            base_height = [0.68, 0.78] # [0.40, 0.56] # TODO: lower than previous height
             stand_still = [0, 1]
 
     class gait:
@@ -126,13 +126,13 @@ class BipedCfgSF(BaseConfig):
         touch_down_vel = 0.0
 
         class ranges:
-            frequencies = [1.0, 1.5]
+            frequencies = [1.0, 1.5] # [1.0, 2.5]
             offsets = [0.5, 0.5]  # offset is hard to learn
             # durations = [0.3, 0.8]  # small durations(<0.4) is hard to learn
             # frequencies = [2, 2]
             # offsets = [0.5, 0.5]
             durations = [0.5, 0.5]
-            swing_height = [0.10, 0.20]
+            swing_height = [0.10, 0.20] # [0.0, 0.1]
 
     class init_state:
         pos = [0.0, 0.0, 0.8]  # x,y,z [m]
@@ -260,33 +260,30 @@ class BipedCfgSF(BaseConfig):
 
             tracking_lin_vel_x = 1.5
             tracking_lin_vel_y = 1.5
-            tracking_ang_vel = 1.0
-            tacking_base_roll = 1.0
+            tracking_ang_vel = 1
 
             # regulation related rewards
+            base_height = -10
             lin_vel_z = -0.5
             ang_vel_xy = -0.05
             torques = -0.00008
             dof_acc = -2.5e-7
             action_rate = -0.01
             dof_pos_limits = -2.0
-            collision = -1
+            collision = -100 # -1
             action_smooth = -0.01
             orientation = -5.0
-
             feet_distance = -100
-            feet_distance_x = 0.5
             feet_regulation = -0.05
-
             tracking_contacts_shaped_force = -2.0
             tracking_contacts_shaped_vel = -2.0
             tracking_contacts_shaped_height = -2.0
-
             feet_contact_forces = -0.002
             ankle_torque_limits = -0.1
             power = -2e-4
-
             relative_feet_height_tracking = 1.0
+            zero_command_nominal_state = -10.0
+            keep_ankle_pitch_zero_in_air = 1.0
             foot_landing_vel = -10.0
 
         only_positive_rewards = False  # if true negative total rewards are clipped at zero (avoids early termination problems)
@@ -300,22 +297,16 @@ class BipedCfgSF(BaseConfig):
         )
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 0.8
-        base_height_target = 0.70 + 0.08
+        base_height_target = 0.75 # 0.56 # lower than previous height
         feet_height_target = 0.10
-        min_feet_distance = 0.19
-        max_feet_distance = 0.25
+        min_feet_distance = 0.20
         max_contact_force = 100.0  # forces above this value are penalized
         kappa_gait_probs = 0.05
         gait_force_sigma = 25.0
         gait_vel_sigma = 0.25
         gait_height_sigma = 0.005
-        gait_base_height_sigma = 0.01
-        gait_ankle_angle_sigma = 0.25
 
-        feet_distance_x_sigma = 0.001
-
-        about_landing_threshold = 0.07
-        desired_swing_ankle_angle = 0.1
+        about_landing_threshold = 0.05
 
     class normalization:
         class obs_scales:
@@ -366,7 +357,7 @@ class BipedCfgSF(BaseConfig):
             contact_offset = 0.01  # [m]
             rest_offset = 0.0  # [m]
             bounce_threshold_velocity = 0.5  # 0.5 [m/s]
-            max_depenetration_velocity = 5.0
+            max_depenetration_velocity = 1.0
             max_gpu_contact_pairs = 2**23  # 2**24 -> needed for 8000 envs and more
             default_buffer_size_multiplier = 5
             contact_collection = (
@@ -393,6 +384,7 @@ class BipedCfgPPOSF(BaseConfig):
         critic_hidden_dims = [512, 256, 128]
         activation = "elu"  # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
         orthogonal_init = False
+        fix_std_noise_value = None
 
     class algorithm:
         # PPO training params
