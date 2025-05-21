@@ -15,18 +15,21 @@
    - `cd legged_gym && pip install -e .`
 
 ### CODE STRUCTURE ###
-1. Each environment is defined by an env file (`legged_robot.py`) and a config file (`legged_robot_config.py`). The config file contains two classes: one conatianing all the environment parameters (`LeggedRobotCfg`) and one for the training parameters (`LeggedRobotCfgPPo`).  
+1. Each environment is defined by an env file `pointfoot_flat.py` and a config file `pointfoot_flat_config.py`(take pointfoot for example). The config file contains two classes: one conatianing all the environment parameters (`BipedCfgPF`) and one for the training parameters (`BipedCfgPPOPF`).  
 2. Both env and config classes use inheritance.  
 3. Each non-zero reward scale specified in `cfg` will add a function with a corresponding name to the list of elements which will be summed to get the total reward.  
 4. Tasks must be registered using `task_registry.register(name, EnvClass, EnvConfig, TrainConfig)`. This is done in `envs/__init__.py`, but can also be done from outside of this repository.  
 
 ### Usage ###
-1. Train:  
-  ```python legged_gym/scripts/train.py --task=biped --headless```
+1. Train(take pointfoot for example):
+
+    ```export ROBOT_TYPE=PF_TRON1A```
+
+    ```python legged_gym/scripts/train.py --task=pointfoot_flat --headless```
     -  To run on CPU add following arguments: `--sim_device=cpu`, `--rl_device=cpu` (sim on CPU and rl on GPU is possible).
     -  To run headless (no rendering) add `--headless`.
     - **Important**: To improve performance, once the training starts press `v` to stop the rendering. You can then enable it later to check the progress.
-    - The trained policy is saved in `issacgym_anymal/logs/<experiment_name>/<date_time>_<run_name>/model_<iteration>.pt`. Where `<experiment_name>` and `<run_name>` are defined in the train config.
+    - The trained policy is saved in `pointfoot-legged-gym/logs/<experiment_name>/<ROBOT_TYPE>/<date_time>_<run_name>/model_<iteration>.pt`. Where `<experiment_name>` and `<run_name>` are defined in the train config.
     -  The following command line arguments override the values set in the config files:
      - --task TASK: Task name.
      - --resume:   Resume training from a checkpoint
@@ -38,21 +41,9 @@
      - --seed SEED:  Random seed.
      - --max_iterations MAX_ITERATIONS:  Maximum number of training iterations.
 2. Play a trained policy:  
-  ```python issacgym_anymal/scripts/play.py --task=biped```
-    - By default the loaded policy is the last model of the last run of the experiment folder.
-    - Other runs/model iteration can be selected by setting `load_run` and `checkpoint` in the train config.
-
-### Adding a new environment ###
-The base environment `legged_robot` implements a rough terrain locomotion task. The corresponding cfg does not specify a robot asset (URDF/ MJCF) and no reward scales. 
-
-1. Add a new folder to `envs/` with `'<your_env>_config.py`, which inherit from an existing environment cfgs  
-2. If adding a new robot:
-    - Add the corresponding assets to `resourses/`.
-    - In `cfg` set the asset path, define body names, default_joint_positions and PD gains. Specify the desired `train_cfg` and the name of the environment (python class).
-    - In `train_cfg` set `experiment_name` and `run_name`
-3. (If needed) implement your environment in <your_env>.py, inherit from an existing environment, overwrite the desired functions and/or add your reward functions.
-4. Register your env in `legged_gym/envs/__init__.py`.
-5. Modify/Tune other parameters in your `cfg`, `cfg_train` as needed. To remove a reward set its scale to zero. Do not modify parameters of other envs!
+  ```python legged_gym/scripts/play.py --task=pointfoot_flat --load_run your_model_path --checkpoint your_checkpoint```
+    - `load_run` is the folder name which contains your training results, for example `Apr18_15-48-46_`
+    - `checkpoint` is the number of training iteration, for example the checkpoint of `model_10000.pt` is 10000.
 
 
 ### Known Issues ###
