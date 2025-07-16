@@ -115,6 +115,7 @@ class BipedSF(BaseTask):
         self.dof_acc = (self.last_dof_vel - self.dof_vel) / self.dt
         self.dof_pos_int += (self.dof_pos - self.raw_default_dof_pos) * self.dt
         self.power = torch.abs(self.torques * self.dof_vel)
+        self.end_effector_state[:] = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.ee_idx]
 
         # self.dof_jerk = (self.last_dof_acc - self.dof_acc) / self.dt
 
@@ -168,7 +169,7 @@ class BipedSF(BaseTask):
 
         # 重新初始化obs_history，使其维度正确
         # 实际观测维度是 obs_buf.shape[1]，而不是 self.num_obs
-        actual_obs_dim = self.obs_buf.shape[1]  # 应该是 242 (54 + 187)
+        actual_obs_dim = self.obs_buf.shape[1]  # 应该是 235 (48 + 187)
         if self.obs_history.shape[1] != actual_obs_dim * self.obs_history_length:
             self.obs_history = torch.zeros(
                 self.num_envs,
@@ -182,21 +183,28 @@ class BipedSF(BaseTask):
             (self.obs_history[:, actual_obs_dim :], self.obs_buf), dim=-1
         )
 
+
     def _compute_torques(self, actions):
-        """简化的统一PD控制器，参考airbot的实现"""
         actions_scaled = actions * self.cfg.control.action_scale
-        
-        # 统一的PD控制器
-        torques = (
-            self.p_gains * 
-            (actions_scaled + self.default_dof_pos - self.dof_pos)
-            - self.d_gains * self.dof_vel
-        )
+
+        control_type = self.cfg.control.control_type
+        if control_type == "P":
+            torques = (
+                self.p_gains * (actions_scaled + self.default_dof_pos - self.dof_pos)
+                - self.d_gains * self.dof_vel
+            )
+        elif control_type == "V":
+            torques = (
+                self.p_gains * (actions_scaled - self.dof_vel)
+                - self.d_gains * (self.dof_vel - self.last_dof_vel) / self.sim_params.dt
+            )
+        elif control_type == "T":
+            torques = actions_scaled
+        else:
+            raise NameError(f"Unknown controller type: {control_type}")
         
         return torch.clip(
-            torques * self.torques_scale, 
-            -self.torque_limits, 
-            self.torque_limits
+            torques * self.torques_scale, -self.torque_limits, self.torque_limits
         )
     
 
@@ -211,11 +219,14 @@ class BipedSF(BaseTask):
         Returns:
             [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
         """
+        # 计算基础观测维度
+        base_obs_dim = 3 + 3 + 14 + 14 + 14  # ang_vel + gravity + dof_pos + dof_vel + actions
+        
         # 如果启用高度测量，添加高度采样点
         if self.cfg.terrain.measure_heights:
-            total_obs_dim = self.cfg.env.num_observations + self.cfg.env.num_height_samples
+            total_obs_dim = base_obs_dim + self.cfg.env.num_height_samples
         else:
-            total_obs_dim = self.cfg.env.num_observations
+            total_obs_dim = base_obs_dim
             
         noise_vec = torch.zeros(total_obs_dim, device=self.device, dtype=torch.float)
         self.add_noise = self.cfg.noise.add_noise
@@ -523,19 +534,80 @@ class BipedSF(BaseTask):
         )
 
     def compute_self_observations(self):
-        """简化观测结构，参考airbot的实现"""
-        # 参考airbot的观测结构
-        # 要改！！！需要把时钟加进去
         obs_buf = torch.cat((
             self.base_ang_vel * self.obs_scales.ang_vel, # base_ang_vel 是base的角速度, 3维
             self.projected_gravity, # 映射的重力, 3维
             (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, # dof_pos是关节位置, 14维
             self.dof_vel * self.obs_scales.dof_vel, # dof_vel是关节速度, 14维
             self.actions, # 动作, 14维
-            self.clock_inputs_sin.view(self.num_envs, 1), # 时钟, 1维   
+            self.clock_inputs_sin.view(self.num_envs, 1), # 时钟, 1维
             self.clock_inputs_cos.view(self.num_envs, 1), # 时钟, 1维
             self.gaits, # 步态, 4维
         ), dim=-1)
+
+        privileged_obs_buf = torch.empty(self.num_envs, 0).to(self.device)
+
+        if self.cfg.env.priv_observe_friction:
+            friction_coeffs_scale, friction_coeffs_shift = get_scale_shift(self.cfg.normalization.friction_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.friction_coeffs[:, 0].unsqueeze(1) - friction_coeffs_shift) * friction_coeffs_scale), dim=1)
+        
+        if self.cfg.env.priv_observe_ground_friction:
+            self.ground_friction_coeffs = self._get_ground_frictions(range(self.num_envs))
+            ground_friction_coeffs_scale, ground_friction_coeffs_shift = get_scale_shift(self.cfg.normalization.ground_friction_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.ground_friction_coeffs.unsqueeze(1) - ground_friction_coeffs_shift) * ground_friction_coeffs_scale), dim=1)
+       
+        if self.cfg.env.priv_observe_restitution:
+            restitutions_scale, restitutions_shift = get_scale_shift(self.cfg.normalization.restitution_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.restitutions[:, 0].unsqueeze(1) - restitutions_shift) * restitutions_scale), dim=1)
+            
+        if self.cfg.env.priv_observe_base_mass:
+            payloads_scale, payloads_shift = get_scale_shift(self.cfg.normalization.added_mass_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.payloads.unsqueeze(1) - payloads_shift) * payloads_scale), dim=1)
+        
+        if self.cfg.env.priv_observe_com_displacement:
+            com_displacements_scale, com_displacements_shift = get_scale_shift(
+                self.cfg.normalization.com_displacement_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.com_displacements - com_displacements_shift) * com_displacements_scale), dim=1)
+        
+        if self.cfg.env.priv_observe_motor_strength:
+            motor_strengths_scale, motor_strengths_shift = get_scale_shift(self.cfg.normalization.motor_strength_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.motor_strengths - motor_strengths_shift) * motor_strengths_scale), dim=1)
+        
+        if self.cfg.env.priv_observe_motor_offset:
+            motor_offset_scale, motor_offset_shift = get_scale_shift(self.cfg.normalization.motor_offset_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.motor_offsets - motor_offset_shift) * motor_offset_scale), dim=1)
+        
+        if self.cfg.env.priv_observe_body_height:
+            body_height_scale, body_height_shift = get_scale_shift(self.cfg.normalization.body_height_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, ((self.root_states[:self.num_envs, 2]).view(self.num_envs, -1) - body_height_shift) * body_height_scale), dim=1)
+
+        if self.cfg.env.priv_observe_gravity:
+            gravity_scale, gravity_shift = get_scale_shift(self.cfg.normalization.gravity_range)
+            privileged_obs_buf = torch.cat((privileged_obs_buf, (self.gravities - gravity_shift) / gravity_scale), dim=1)
+        
+        if self.cfg.env.priv_observe_vel:
+            if self.cfg.commands.global_reference:
+                privileged_obs_buf = torch.cat((privileged_obs_buf, self.root_states[:self.num_envs, 7:10] * self.obs_scales.lin_vel), dim=-1)
+            else:
+                privileged_obs_buf = torch.cat((privileged_obs_buf, self.base_lin_vel * self.obs_scales.lin_vel), dim=-1)
+   
+        if self.cfg.env.priv_observe_high_freq_goal:
+            privileged_obs_buf = torch.cat((privileged_obs_buf,
+                                            self.obj_pose_in_ee.clone(),
+                                            self.obj_abg_in_ee.clone()),
+                                            dim=1)
+
+
+        # ee pose and quat dim=7
+        lpy = self.get_lpy_in_base_coord(torch.arange(self.num_envs, device=self.device))
+        forward = quat_apply(self.base_quat, self.forward_vec)
+        yaw = torch.atan2(forward[:, 1], forward[:, 0])
+        quat_base = quat_from_euler_xyz(torch.zeros_like(yaw), torch.zeros_like(yaw), yaw)
+        quat_ee_in_base = quat_mul(quat_base, self.end_effector_state[:, 3:7])
+        # privileged_obs_buf = torch.cat((privileged_obs_buf, self.end_effector_state[:, :7]), dim=1)
+        privileged_obs_buf = torch.cat((privileged_obs_buf, lpy, quat_ee_in_base), dim=1)
+
+        self.privileged_obs_buf = privileged_obs_buf
         
         # 计算critic观测
         critic_obs_buf = torch.cat((
@@ -1124,3 +1196,24 @@ class BipedSF(BaseTask):
     def _reward_stumble(self):
         """防绊倒奖励：惩罚脚部侧向力过大"""
         return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) > 5., dim=1)
+
+
+    def get_lpy_in_base_coord(self, env_ids):
+        forward = quat_apply(self.base_quat[env_ids], self.forward_vec[env_ids])
+        yaw = torch.atan2(forward[:, 1], forward[:, 0])
+
+        self.grasper_move = torch.tensor([0.1, 0, 0], dtype=torch.float, device=self.device).repeat((len(env_ids), 1))
+        self.grasper_move_in_world = quat_rotate(self.end_effector_state[env_ids, 3:7], self.grasper_move)
+        self.grasper_in_world = self.end_effector_state[env_ids, :3] + self.grasper_move_in_world
+
+        x = torch.cos(yaw) * (self.grasper_in_world[:, 0] - self.root_states[env_ids, 0]) \
+            + torch.sin(yaw) * (self.grasper_in_world[:, 1] - self.root_states[env_ids, 1])
+        y = -torch.sin(yaw) * (self.grasper_in_world[:, 0] - self.root_states[env_ids, 0]) \
+            + torch.cos(yaw) * (self.grasper_in_world[:, 1] - self.root_states[env_ids, 1])
+        z = torch.mean(self.grasper_in_world[:, 2].unsqueeze(1) - self.measured_heights, dim=1) - 0.38
+
+        l = torch.sqrt(x**2 + y**2 + z**2)
+        p = torch.atan2(z, torch.sqrt(x**2 + y**2))
+        y_aw = torch.atan2(y, x)
+
+        return torch.stack([l, p, y_aw], dim=-1)

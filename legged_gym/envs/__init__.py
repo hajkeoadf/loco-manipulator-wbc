@@ -54,7 +54,7 @@ if robot_type.startswith("PF"):
 elif robot_type == "SF_TRON1A":
     from legged_gym.envs.solefoot_flat.solefoot_flat import BipedSF
     from legged_gym.envs.solefoot_flat.solefoot_flat_config import BipedCfgSF, BipedCfgPPOSF
-    task_registry.register("pointfoot_flat", BipedSF, BipedCfgSF(), BipedCfgPPOSF())
+    task_registry.register("solefoot_flat", BipedSF, BipedCfgSF(), BipedCfgPPOSF())
 
 elif robot_type == "WF_TRON1A":
     from legged_gym.envs.wheelfoot_flat.wheelfoot_flat import BipedWF

@@ -57,6 +57,8 @@ class BaseTask:
         sim_device_type, self.sim_device_id = gymutil.parse_device_str(self.sim_device)
         self.headless = headless
 
+        self.ee_idx = cfg.env.ee_idx
+
         # env device is GPU only if sim is on GPU and use_gpu_pipeline=True, otherwise returned tensors are copied to CPU by physX.
         if sim_device_type == "cuda" and sim_params.use_gpu_pipeline:
             self.device = self.sim_device
@@ -1219,6 +1221,7 @@ class BaseTask:
         self.rigid_body_state = gymtorch.wrap_tensor(rigid_body_state).view(
             self.num_envs, self.num_bodies, -1
         )
+        self.end_effector_state = self.rigid_body_state.view(self.num_envs, self.num_bodies, 13)[:, self.ee_idx]
         self.feet_state = self.rigid_body_state[:, self.feet_indices, :]
         self.rigid_body_state = gymtorch.wrap_tensor(rigid_body_state).view(
             self.num_envs, self.num_bodies, -1
@@ -1314,27 +1317,20 @@ class BaseTask:
             device=self.device,
             requires_grad=False,
         )
-        if self.cfg.commands.heading_command:
-            self.commands = torch.zeros(
-                self.num_envs,
-                self.cfg.commands.num_commands + 1,
-                dtype=torch.float,
-                device=self.device,
-                requires_grad=False,
-            )  # x vel, y vel, yaw vel, heading
-        else:
-            self.commands = torch.zeros(
-                self.num_envs,
-                self.cfg.commands.num_commands,
-                dtype=torch.float,
-                device=self.device,
-                requires_grad=False,
-            )  # x vel, y vel, yaw vel, heading
-        self.commands_scale = torch.tensor(
-            [self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel],
+        # 初始化self.commands，始终为num_commands列
+        self.commands = torch.zeros(
+            self.num_envs,
+            self.cfg.commands.num_commands,
+            dtype=torch.float,
             device=self.device,
             requires_grad=False,
-        )  # TODO change this
+        )  # x vel, y vel, yaw vel, heading, stand_still
+        # 强制修正self.commands_scale为5维
+        self.commands_scale = torch.tensor(
+            [self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel, 1.0, 1.0],
+            device=self.device,
+            requires_grad=False,
+        )
         self.command_ranges["lin_vel_x"] = torch.zeros(
             self.num_envs,
             2,

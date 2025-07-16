@@ -128,9 +128,14 @@ def play(args):
     # camera_vel = np.array([1.0, 1.0, 0.0])
     # camera_direction = np.array(env_cfg.viewer.lookat) - np.array(env_cfg.viewer.pos)
     img_idx = 0
+    print('DEBUG obs_history shape:', obs_history.shape)
+    print('DEBUG obs shape:', obs.shape)
+    print('DEBUG commands shape:', commands.shape)
     est = None
     for i in range(10 * int(env.max_episode_length)):
         est = encoder(obs_history)
+        # print('DEBUG est shape:', est.shape)
+        # print('DEBUG concatenated input shape:', torch.cat((est, obs, commands), dim=-1).shape)
         actions = policy(torch.cat((est, obs, commands), dim=-1).detach())
 
         env.commands[:, :] = commands_val
