@@ -15,9 +15,7 @@ import torch
 from params_proto import PrefixProto
 
 import wandb
-from go1_gym import MINI_GYM_ROOT_DIR
-from go1_gym.envs.automatic import HistoryWrapper
-from go1_gym.utils import global_switch
+from legged_gym.utils import global_switch
 
 from .arm_ac import ArmActorCritic
 from .legged_ac import LeggedActorCritic
@@ -64,11 +62,10 @@ def custom_increase_reward_scale(iteration, initial_scale=0.2, final_scale=0.7, 
     reward_scale = initial_scale + (final_scale - initial_scale) * x
     return reward_scale
 
-class Runner:
+class OnPolicyRunner:
 
     def __init__(self, env: VecEnv, train_cfg, log_dir=None, device="cpu"):
         self.cfg = train_cfg["runner"]
-        self.ecd_cfg = train_cfg[self.cfg["encoder_class_name"]]
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
         self.device = device
@@ -140,7 +137,7 @@ class Runner:
                                                              high=int(self.env.max_episode_length))
 
         # split train and test envs
-        num_train_envs = self.env.num_train_envs
+        num_train_envs = self.env.num_envs
 
         obs_dict_arm = self.env.get_arm_observations()
         obs_arm, privileged_obs_arm, obs_history_arm = obs_dict_arm["obs"], obs_dict_arm["privileged_obs"], obs_dict_arm["obs_history"]
@@ -171,6 +168,7 @@ class Runner:
                     if global_switch.switch_open:
                         actions_arm = self.alg_arm.act(obs_arm[:num_train_envs], privileged_obs_arm[:num_train_envs],
                                                     obs_history_arm[:num_train_envs])
+                        # 输出legged的action command
                         self.env.plan(actions_arm[..., -self.env.num_plan_actions:])
                         
                     legged_obs_dict = self.env.get_legged_observations()

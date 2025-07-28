@@ -31,6 +31,46 @@
 from legged_gym.envs.base.base_config import BaseConfig
 
 class BipedCfgSF(BaseConfig):
+    class arm:
+        num_actions_arm = 6
+        arm_num_privileged_obs = 9
+        arm_num_observation_history = 30
+        arm_num_observations = 26 - 6
+        arm_num_obs_history = arm_num_observations * arm_num_observation_history
+        arm_num_commands = 6
+        num_actions_arm_cd = 8
+
+        class commands:
+            angle75 = torch.deg2rad(torch.tensor(75))
+            angle60 = torch.deg2rad(torch.tensor(60))
+            l = [0.3, 0.77]
+            p = [-torch.pi*0.45 , torch.pi*0.45]  # 75 
+            y = [-torch.pi/2 , torch.pi/2]
+            roll_ee = [-torch.pi * 0.45, torch.pi * 0.45]
+            pitch_ee = [-angle60 , angle60]
+            yaw_ee = [-angle75 , angle75]
+            
+            T_traj = [2, 3.]
+            T_force_range = [1, 4.]
+            add_force_thres = 0.3
+
+        class obs_scales:
+            l = 1.
+            p = 1.
+            y = 1.
+            wx = 1.
+            wy = 1.
+            wz = 1.
+
+    class legged:
+        num_actions_loco = 8
+        legged_num_privileged_obs = 2
+        legged_num_observation_history = 30
+        legged_num_observations = 56
+        legged_num_obs_history = legged_num_observations * legged_num_observation_history
+        legged_num_commands = 5
+        legged_actions = 12
+
     class env:
         num_envs = 4096  # 减少环境数量以提高稳定性
         # num_privileged_group = 0 # 4096
@@ -124,14 +164,6 @@ class BipedCfgSF(BaseConfig):
         heading_command = False  # if true: compute ang vel command from heading error, only work on adaptive group
         min_norm = 0.1
         zero_command_prob = 0.8
-
-        class ranges:
-            lin_vel_x = [-1.0, 1.0]  # 参考airbot的速度范围
-            lin_vel_y = [-0.0, 0.0]  # 参考airbot的速度范围
-            ang_vel_yaw = [-0.0, 1.0]  # 参考airbot的速度范围
-            heading = [-3.14159, 3.14159]
-            base_height = [0.68, 0.78] # [0.40, 0.56] # TODO: lower than previous height
-            stand_still = [0, 1]
 
     class gait:
         num_gait_params = 4

@@ -247,7 +247,7 @@ class BipedSF(BaseTask):
         
         # 为高度测量添加噪声
         if self.cfg.terrain.measure_heights:
-            noise_vec[48:] = noise_scales.height_measurements * noise_level
+            noise_vec[54:] = noise_scales.height_measurements * noise_level
             
         return noise_vec
 
@@ -616,25 +616,76 @@ class BipedSF(BaseTask):
         ), dim=-1)
         
         return obs_buf, critic_obs_buf
+    
+    def quat_to_angle(self, quat):
+        quat = quat.to(self.device)
+        y_vector = to_torch([0., 1., 0.], device=self.device).repeat((quat.shape[0], 1))
+        z_vector = to_torch([0., 0., 1.], device=self.device).repeat((quat.shape[0], 1))
+        x_vector = to_torch([1., 0., 0.], device=self.device).repeat((quat.shape[0], 1))
+        roll_vec = quat_apply(quat, y_vector) # [0,1,0]
+        alpha = torch.atan2(roll_vec[:, 2], roll_vec[:, 1]) # alpha angle = arctan2(z, y)
+        pitch_vec = quat_apply(quat, z_vector) # [0,0,1]
+        beta = torch.atan2(pitch_vec[:, 0], pitch_vec[:, 2]) # beta angle = arctan2(x, z)
+        yaw_vec = quat_apply(quat, x_vector) # [1,0,0]
+        gamma = torch.atan2(yaw_vec[:, 1], yaw_vec[:, 0]) # gamma angle = arctan2(y, x)
+        
+        return torch.stack([alpha, beta, gamma], dim=-1)
 
     def get_observations(self):
-        # # 确保obs_buf和obs_history包含完整的观测（包含高度测量）
-        # if self.obs_buf is None or self.obs_buf.shape[1] != self.num_obs:
-        #     # 如果obs_buf还没初始化，先reset一次
-        #     if hasattr(self, 'reset_idx') and callable(self.reset_idx):
-        #         import torch
-        #         env_ids = torch.arange(self.num_envs, device=self.device)
-        #         self.reset_idx(env_ids)
-        #     else:
-        #         self.compute_observations()
-        # elif self.obs_history is None or self.obs_history.shape[1] != self.num_obs * self.obs_history_length:
-        #     self.compute_observations()
         return (
             self.obs_buf,
             self.obs_history,
             self.commands[:, :5] * self.commands_scale,  # 5维命令输出
             self.critic_obs_buf
         )
+
+    def get_arm_observations(self):
+        """获取机械臂专用观测"""
+        # 1. 机械臂6关节
+        dof_pos_arm = (self.dof_pos[:, 8:14] - self.default_dof_pos[:, 8:14]) * self.obs_scales.dof_pos  # [num_envs, 6]
+        dof_vel_arm = self.dof_vel[:, 8:14] * self.obs_scales.dof_vel  # [num_envs, 6]
+        actions_arm = self.actions[:, 8:14]  # [num_envs, 6]
+        # 2. 末端执行器空间位置
+        ee_state = self.end_effector_state[:, :7]  # [num_envs, 7] (x, y, z, qx, qy, qz, qw)
+        # 3. base姿态（roll, pitch）
+        rpy = quat_to_euler(self.base_quat)  # shape: [num_envs, 3]
+        roll = rpy[:, 0:1]
+        pitch = rpy[:, 1:2]
+        # 4. 任务指令（如末端目标）
+        arm_commands = self.arm_commands[:, :6] if hasattr(self, 'arm_commands') else torch.zeros(self.num_envs, 6, device=self.device)
+
+        obs_buf = torch.cat([
+            dof_pos_arm, dof_vel_arm, actions_arm,
+            ee_state, roll, pitch, arm_commands
+        ], dim=-1)
+
+        privileged_obs_buf = torch.empty(self.num_envs, 0).to(self.device)
+        return obs_buf, privileged_obs_buf
+
+    def get_legged_observations(self):
+        # 1. base线速度、角速度
+        base_lin_vel = self.base_lin_vel * self.obs_scales.lin_vel  # shape: [num_envs, 3]
+        base_ang_vel = self.base_ang_vel * self.obs_scales.ang_vel  # shape: [num_envs, 3]
+        # 2. base姿态（重力投影）
+        projected_gravity = self.projected_gravity  # shape: [num_envs, 3]
+        # 3. 腿部关节（假设前8个是腿部）
+        dof_pos_leg = (self.dof_pos[:, :8] - self.default_dof_pos[:, :8]) * self.obs_scales.dof_pos  # [num_envs, 8]
+        dof_vel_leg = self.dof_vel[:, :8] * self.obs_scales.dof_vel  # [num_envs, 8]
+        actions_leg = self.actions[:, :8]  # [num_envs, 8]
+        # 4. 足端接触状态
+        contact_states = (torch.norm(self.contact_forces[:, self.feet_indices], dim=-1) > 1.).float()  # [num_envs, n_feet]
+        # 5. 任务指令
+        commands = self.commands[:, :3]  # [num_envs, 3] 线速度/角速度命令
+
+        obs_buf = torch.cat([
+            base_lin_vel, base_ang_vel, projected_gravity,
+            dof_pos_leg, dof_vel_leg, actions_leg,
+            contact_states, commands
+        ], dim=-1)
+
+        # privileged_obs_buf 可选，暂时返回空
+        privileged_obs_buf = torch.empty(self.num_envs, 0).to(self.device)
+        return obs_buf, privileged_obs_buf
 
     def _post_physics_step_callback(self):
         """Callback called before computing terminations, rewards, and observations
@@ -808,7 +859,8 @@ class BipedSF(BaseTask):
         super()._init_buffers()
         
         # 重新设置num_obs为实际观测维度（包含高度测量）
-        self.num_obs = self.cfg.env.num_observations + self.cfg.env.num_height_samples  # 48 + 187 = 235
+        # 新的观测结构: base_obs(6) + leg_obs(24) + arm_obs(18) + gait_obs(6) = 54维
+        self.num_obs = 54 + self.cfg.env.num_height_samples  # 54 + 187 = 241
         
         # 重新初始化obs_history为正确的维度
         self.obs_history = torch.zeros(
