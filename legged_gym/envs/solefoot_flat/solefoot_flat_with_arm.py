@@ -1,0 +1,647 @@
+# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+
+import time
+import numpy as np
+import os
+
+from isaacgym.torch_utils import *
+from isaacgym import gymtorch, gymapi, gymutil
+from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float, torch_wrap_to_pi_minuspi, euler_from_quat, quat_from_euler_xyz
+
+import torch
+from typing import Tuple, Dict
+
+from legged_gym.envs.solefoot_flat.solefoot_flat import BipedSF
+from legged_gym import LEGGED_GYM_ROOT_DIR
+from legged_gym.utils.helpers import class_to_dict
+from legged_gym.utils.terrain import Terrain, Terrain_Perlin
+from .solefoot_flat_with_arm_config import BipedCfgSFWithArm
+
+def cart2sphere(cart):
+    """Convert cartesian coordinates to spherical coordinates"""
+    x, y, z = cart[..., 0], cart[..., 1], cart[..., 2]
+    r = torch.sqrt(x**2 + y**2 + z**2)
+    theta = torch.acos(torch.clamp(z / r, -1, 1))
+    phi = torch.atan2(y, x)
+    return torch.stack([r, theta, phi], dim=-1)
+
+def sphere2cart(sphere):
+    """Convert spherical coordinates to cartesian coordinates"""
+    r, theta, phi = sphere[..., 0], sphere[..., 1], sphere[..., 2]
+    x = r * torch.sin(theta) * torch.cos(phi)
+    y = r * torch.sin(theta) * torch.sin(phi)
+    z = r * torch.cos(theta)
+    return torch.stack([x, y, z], dim=-1)
+
+def orientation_error(desired, current):
+    """Compute orientation error between desired and current quaternions"""
+    q1 = current / torch.norm(current, dim=-1, keepdim=True)
+    q2 = desired / torch.norm(desired, dim=-1, keepdim=True)
+    
+    error = torch.zeros_like(q1)
+    error[:, 0] = q1[:, 0] * q2[:, 1] - q1[:, 1] * q2[:, 0] - q1[:, 2] * q2[:, 3] + q1[:, 3] * q2[:, 2]
+    error[:, 1] = q1[:, 0] * q2[:, 2] + q1[:, 1] * q2[:, 3] - q1[:, 2] * q2[:, 0] - q1[:, 3] * q2[:, 1]
+    error[:, 2] = q1[:, 0] * q2[:, 3] - q1[:, 1] * q2[:, 2] + q1[:, 2] * q2[:, 1] - q1[:, 3] * q2[:, 0]
+    error[:, 3] = q1[:, 0] * q2[:, 0] + q1[:, 1] * q2[:, 1] + q1[:, 2] * q2[:, 2] + q1[:, 3] * q2[:, 3]
+    
+    return error
+
+class BipedSFWithArm(BipedSF):
+    cfg: BipedCfgSFWithArm
+
+    def _get_noise_scale_vec(self, cfg):
+        """Sets a vector used to scale the noise added to the observations."""
+        noise_vec = torch.zeros_like(self.obs_buf[0])
+        self.add_noise = self.cfg.noise.add_noise
+        noise_scales = self.cfg.noise.noise_scales
+        noise_level = self.cfg.noise.noise_level
+        noise_vec[:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel
+        noise_vec[3:6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        noise_vec[6:9] = noise_scales.gravity * noise_level
+        noise_vec[9:12] = 0. # commands
+        noise_vec[12: 12 + self.num_dofs] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[12 + self.num_dofs: 12 + 2 * self.num_dofs] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        noise_vec[12 + 2 * self.num_dofs: 12 + 2 * self.num_dofs + self.num_actions] = 0. # previous actions
+        curr_idx = 12 + 2 * self.num_dofs + self.num_actions
+        if self.cfg.terrain.measure_heights:
+            noise_vec[curr_idx: curr_idx + 187] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+        return noise_vec
+
+    def _parse_cfg(self, cfg):
+        super()._parse_cfg(cfg)
+        
+        # 机械臂相关配置
+        self.goal_ee_ranges = class_to_dict(self.cfg.goal_ee.ranges)
+        self.init_goal_ee_l_ranges = self.goal_ee_l_ranges = np.array(self.goal_ee_ranges['init_pos_l'])
+        self.init_goal_ee_p_ranges = self.goal_ee_p_ranges = np.array(self.goal_ee_ranges['init_pos_p'])
+        self.init_goal_ee_y_ranges = self.goal_ee_y_ranges = np.array(self.goal_ee_ranges['init_pos_y'])
+        self.final_goal_ee_l_ranges = np.array(self.goal_ee_ranges['final_pos_l'])
+        self.final_goal_ee_p_ranges = np.array(self.goal_ee_ranges['final_pos_p'])
+        self.final_goal_ee_y_ranges = np.array(self.goal_ee_ranges['final_pos_y'])
+        self.final_tracking_ee_reward = self.cfg.goal_ee.ranges.final_tracking_ee_reward
+        self.goal_ee_l_schedule = self.cfg.goal_ee.l_schedule
+        self.goal_ee_p_schedule = self.cfg.goal_ee.p_schedule
+        self.goal_ee_y_schedule = self.cfg.goal_ee.y_schedule
+        self.tracking_ee_reward_schedule = self.cfg.goal_ee.tracking_ee_reward_schedule
+
+        self.goal_ee_delta_orn_ranges = torch.tensor(self.goal_ee_ranges['final_delta_orn'])
+        
+        # 机械臂控制参数
+        self.arm_osc_kp = torch.tensor(self.cfg.arm.osc_kp, device=self.device, dtype=torch.float)
+        self.arm_osc_kd = torch.tensor(self.cfg.arm.osc_kd, device=self.device, dtype=torch.float)
+        self.grasp_offset = self.cfg.arm.grasp_offset
+        self.init_target_ee_base = torch.tensor(self.cfg.arm.init_target_ee_base, device=self.device).unsqueeze(0)
+
+    def _prepare_reward_function(self):
+        """Prepares reward functions for both legs and arm."""
+        super()._prepare_reward_function()
+        
+        # 添加机械臂奖励函数
+        self.arm_reward_scales = class_to_dict(self.cfg.rewards.scales)
+        for key in list(self.arm_reward_scales.keys()):
+            scale = self.arm_reward_scales[key]
+            if scale == 0:
+                self.arm_reward_scales.pop(key)
+        
+        self.arm_reward_functions = []
+        self.arm_reward_names = []
+        for name, scale in self.arm_reward_scales.items():
+            if name == "termination":
+                continue
+            self.arm_reward_names.append(name)
+            name = '_reward_' + name
+            self.arm_reward_functions.append(getattr(self, name))
+
+    def _create_envs(self):
+        """Creates environments with robot and arm."""
+        super()._create_envs()
+        
+        # 获取机械臂末端执行器索引
+        self.ee_idx = self.body_names_to_idx.get("J6_Link", self.cfg.env.ee_idx)
+        
+        # 初始化机械臂相关变量
+        self._init_arm_variables()
+
+    def _init_arm_variables(self):
+        """Initialize arm-related variables."""
+        # 目标生成相关
+        self.traj_timesteps = torch_rand_float(self.cfg.goal_ee.traj_time[0], self.cfg.goal_ee.traj_time[1], (self.num_envs, 1), device=self.device).squeeze() / self.dt
+        self.traj_total_timesteps = self.traj_timesteps + torch_rand_float(self.cfg.goal_ee.hold_time[0], self.cfg.goal_ee.hold_time[1], (self.num_envs, 1), device=self.device).squeeze() / self.dt
+        self.goal_timer = torch.zeros(self.num_envs, device=self.device)
+        
+        # 末端执行器目标
+        self.ee_start_sphere = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_goal_sphere = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_goal_delta_orn_euler = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_goal_orn_euler = torch.zeros(self.num_envs, 3, device=self.device)
+        self.curr_ee_goal_cart = torch.zeros(self.num_envs, 3, device=self.device)
+        self.curr_ee_goal_sphere = torch.zeros(self.num_envs, 3, device=self.device)
+        
+        # 碰撞检测
+        self.collision_lower_limits = torch.tensor(self.cfg.goal_ee.collision_lower_limits, device=self.device, dtype=torch.float)
+        self.collision_upper_limits = torch.tensor(self.cfg.goal_ee.collision_upper_limits, device=self.device, dtype=torch.float)
+        self.underground_limit = self.cfg.goal_ee.underground_limit
+        self.num_collision_check_samples = self.cfg.goal_ee.num_collision_check_samples
+        self.collision_check_t = torch.linspace(0, 1, self.num_collision_check_samples, device=self.device)[None, None, :]
+        
+        # 命令模式
+        assert(self.cfg.goal_ee.command_mode in ['cart', 'sphere'])
+        if self.cfg.goal_ee.command_mode == 'cart':
+            self.curr_ee_goal = self.curr_ee_goal_cart
+        else:
+            self.curr_ee_goal = self.curr_ee_goal_sphere
+            
+        # 误差缩放
+        self.sphere_error_scale = torch.tensor(self.cfg.goal_ee.sphere_error_scale, device=self.device)
+        self.orn_error_scale = torch.tensor(self.cfg.goal_ee.orn_error_scale, device=self.device)
+        
+        # 机械臂基座位置
+        self.arm_base_overhead = torch.tensor([0., 0., 0.165], device=self.device)
+        self.z_invariant_offset = torch.tensor([0.53], device=self.device).repeat(self.num_envs, 1)
+        
+        # 初始化目标
+        self._get_init_start_ee_sphere()
+
+    def _init_buffers(self):
+        """Initialize buffers including arm-related ones."""
+        super()._init_buffers()
+        
+        # 机械臂相关缓冲区
+        self.arm_rew_buf = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        
+        # 末端执行器信息 - 需要在post_physics_step中更新
+        self.ee_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self.ee_orn = torch.zeros(self.num_envs, 4, device=self.device)
+        self.ee_vel = torch.zeros(self.num_envs, 6, device=self.device)
+        
+        # 雅可比矩阵和质量矩阵 - 需要在需要时更新
+        self.ee_j_eef = torch.zeros(self.num_envs, 6, 6, device=self.device)
+        self.mm = torch.zeros(self.num_envs, 6, 6, device=self.device)
+        
+        # 期望姿态
+        self.ee_orn_des = torch.tensor([0, 0.7071068, 0, 0.7071068], device=self.device).repeat((self.num_envs, 1))
+
+    def _get_init_start_ee_sphere(self):
+        """Initialize starting end-effector position in spherical coordinates."""
+        init_start_ee_cart = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        init_start_ee_cart[:, 0] = 0.15
+        init_start_ee_cart[:, 2] = 0.15
+        self.init_start_ee_sphere = cart2sphere(init_start_ee_cart)
+
+    def _resample_ee_goal_sphere_once(self, env_ids):
+        """Resample end-effector goal in spherical coordinates."""
+        self.ee_goal_sphere[env_ids, 0] = torch_rand_float(self.goal_ee_l_ranges[0], self.goal_ee_l_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        self.ee_goal_sphere[env_ids, 1] = torch_rand_float(self.goal_ee_p_ranges[0], self.goal_ee_p_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        self.ee_goal_sphere[env_ids, 2] = torch_rand_float(self.goal_ee_y_ranges[0], self.goal_ee_y_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+
+    def _resample_ee_goal_orn_once(self, env_ids):
+        """Resample end-effector orientation goal."""
+        ee_goal_delta_orn_r = torch_rand_float(self.goal_ee_delta_orn_ranges[0, 0], self.goal_ee_delta_orn_ranges[0, 1], (len(env_ids), 1), device=self.device)
+        ee_goal_delta_orn_p = torch_rand_float(self.goal_ee_delta_orn_ranges[1, 0], self.goal_ee_delta_orn_ranges[1, 1], (len(env_ids), 1), device=self.device)
+        ee_goal_delta_orn_y = torch_rand_float(self.goal_ee_delta_orn_ranges[2, 0], self.goal_ee_delta_orn_ranges[2, 1], (len(env_ids), 1), device=self.device)
+        self.ee_goal_delta_orn_euler[env_ids] = torch.cat([ee_goal_delta_orn_r, ee_goal_delta_orn_p, ee_goal_delta_orn_y], dim=-1)
+        self.ee_goal_orn_euler[env_ids] = torch_wrap_to_pi_minuspi(self.ee_goal_delta_orn_euler[env_ids] + self.base_yaw_euler[env_ids])
+
+    def _resample_ee_goal(self, env_ids, is_init=False):
+        """Resample end-effector goals with collision checking."""
+        if len(env_ids) > 0:
+            init_env_ids = env_ids.clone()
+            self._resample_ee_goal_orn_once(env_ids)
+            
+            self.ee_start_sphere[env_ids] = self.ee_goal_sphere[env_ids].clone()
+            for i in range(10):
+                self._resample_ee_goal_sphere_once(env_ids)
+                collision_mask = self.collision_check(env_ids)
+                env_ids = env_ids[collision_mask]
+                if len(env_ids) == 0:
+                    break
+                    
+            self.ee_goal_cart[init_env_ids, :] = sphere2cart(self.ee_goal_sphere[init_env_ids, :])
+            self.goal_timer[init_env_ids] = 0.0
+
+    def collision_check(self, env_ids):
+        """Check for collisions along the trajectory."""
+        ee_target_all_sphere = torch.lerp(self.ee_start_sphere[env_ids, ..., None], self.ee_goal_sphere[env_ids, ..., None], self.collision_check_t).squeeze(-1)
+        ee_target_cart = sphere2cart(torch.permute(ee_target_all_sphere, (2, 0, 1)).reshape(-1, 3)).reshape(self.num_collision_check_samples, -1, 3)
+        collision_mask = torch.any(torch.logical_and(torch.all(ee_target_cart < self.collision_upper_limits, dim=-1), torch.all(ee_target_cart > self.collision_lower_limits, dim=-1)), dim=0)
+        underground_mask = torch.any(ee_target_cart[..., 2] < self.underground_limit, dim=0)
+        return collision_mask | underground_mask
+
+    def update_curr_ee_goal(self):
+        """Update current end-effector goal based on trajectory."""
+        t = torch.clip(self.goal_timer / self.traj_timesteps, 0, 1)
+        self.curr_ee_goal_sphere[:] = torch.lerp(self.ee_start_sphere, self.ee_goal_sphere, t[:, None])
+        self.curr_ee_goal_cart[:] = sphere2cart(self.curr_ee_goal_sphere)
+        self.goal_timer += 1
+        resample_id = (self.goal_timer > self.traj_total_timesteps).nonzero(as_tuple=False).flatten()
+        self._resample_ee_goal(resample_id)
+
+    def get_arm_ee_control_torques(self):
+        """Compute operational space control torques for the arm."""
+        # 更新雅可比矩阵和质量矩阵
+        self.gym.refresh_jacobian_tensors(self.sim)
+        self.gym.refresh_mass_matrix_tensors(self.sim)
+        
+        # 计算逆质量矩阵
+        m_inv = torch.pinverse(self.mm)
+        m_eef = torch.pinverse(self.ee_j_eef @ m_inv @ torch.transpose(self.ee_j_eef, 1, 2))
+        
+        # 计算姿态误差
+        ee_orn_normalized = self.ee_orn / torch.norm(self.ee_orn, dim=-1).unsqueeze(-1)
+        orn_err = orientation_error(self.ee_orn_des, ee_orn_normalized)
+        
+        # 计算位置误差
+        pos_err = (torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + 
+                  quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart) - self.ee_pos)
+        
+        # 组合误差
+        dpose = torch.cat([pos_err, orn_err], -1)
+        
+        # 计算控制输出
+        u = (torch.transpose(self.ee_j_eef, 1, 2) @ m_eef @ 
+             (self.arm_osc_kp * dpose - self.arm_osc_kd * self.ee_vel)[:, :6].unsqueeze(-1)).squeeze(-1)
+        
+        return u
+
+    def _compute_torques(self, actions):
+        """Compute torques for both legs and arm."""
+        # 分离腿部和机械臂动作
+        leg_actions = actions[:, :14]  # 14个腿部关节
+        arm_actions = actions[:, 14:]  # 6个机械臂关节
+        
+        # 计算腿部力矩
+        leg_torques = super()._compute_torques(leg_actions)
+        
+        # 计算机械臂力矩
+        if self.cfg.control.adaptive_arm_gains:
+            arm_actions, delta_arm_gains = arm_actions[:, :6], arm_actions[:, 6:]
+            adaptive_arm_p_gains = self.p_gains[14:] + delta_arm_gains
+            adaptive_arm_d_gains = 2 * (adaptive_arm_p_gains ** 0.5)
+            arm_torques = (adaptive_arm_p_gains * (arm_actions + self.default_dof_pos[14:] - self.dof_pos[:, 14:]) - 
+                          adaptive_arm_d_gains * self.dof_vel[:, 14:])
+        else:
+            arm_torques = (self.p_gains[14:] * (arm_actions + self.default_dof_pos[14:] - self.dof_pos[:, 14:]) - 
+                          self.d_gains[14:] * self.dof_vel[:, 14:])
+        
+        # 组合所有力矩
+        torques = torch.cat([leg_torques, arm_torques], dim=-1)
+        
+        return torch.clip(torques, -self.torque_limits, self.torque_limits)
+
+    def compute_observations(self):
+        """Compute observations including arm-related ones."""
+        # 获取基础观察
+        super().compute_observations()
+        
+        # 添加机械臂相关观察
+        arm_obs = torch.cat([
+            self.curr_ee_goal,  # 当前目标位置 (3)
+            self.ee_goal_delta_orn_euler  # 目标姿态 (3)
+        ], dim=-1)
+        
+        # 组合观察
+        self.obs_buf = torch.cat([self.obs_buf, arm_obs], dim=-1)
+        
+        return self.obs_buf
+
+    def compute_reward(self):
+        """Compute rewards for both legs and arm."""
+        # 计算腿部奖励
+        super().compute_reward()
+        
+        # 计算机械臂奖励
+        self.arm_rew_buf[:] = 0.
+        for i in range(len(self.arm_reward_functions)):
+            name = self.arm_reward_names[i]
+            rew = self.arm_reward_functions[i]() * self.arm_reward_scales[name]
+            self.arm_rew_buf += rew
+            self.episode_sums[name] += rew
+            
+        if self.cfg.rewards.only_positive_rewards:
+            self.arm_rew_buf[:] = torch.clip(self.arm_rew_buf[:], min=0.)
+            
+        self.arm_rew_buf /= 100
+
+    def _reward_tracking_ee_sphere(self):
+        """Reward for tracking end-effector position in spherical coordinates."""
+        ee_pos_local = quat_rotate_inverse(self.base_yaw_quat, 
+                                         self.ee_pos - torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1))
+        ee_pos_error = torch.sum(torch.abs(cart2sphere(ee_pos_local) - self.curr_ee_goal_sphere) * self.sphere_error_scale, dim=1)
+        return torch.exp(-ee_pos_error/self.cfg.rewards.tracking_ee_sigma)
+
+    def _reward_tracking_ee_cart(self):
+        """Reward for tracking end-effector position in cartesian coordinates."""
+        target_ee = (torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + 
+                    quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart))
+        ee_pos_error = torch.sum(torch.abs(self.ee_pos - target_ee), dim=1)
+        return torch.exp(-ee_pos_error/self.cfg.rewards.tracking_ee_sigma)
+
+    def _reward_tracking_ee_orn(self):
+        """Reward for tracking end-effector orientation."""
+        ee_orn_euler = torch.stack(euler_from_quat(self.ee_orn), dim=-1)
+        orn_err = torch.sum(torch.abs(torch_wrap_to_pi_minuspi(self.ee_goal_orn_euler - ee_orn_euler)) * self.orn_error_scale, dim=1)
+        return torch.exp(-orn_err/self.cfg.rewards.tracking_ee_sigma)
+
+    def _reward_arm_energy_abs_sum(self):
+        """Reward for arm energy consumption."""
+        return torch.sum(torch.abs(self.torques[:, 14:] * self.dof_vel[:, 14:]), dim=1)
+
+    def post_physics_step(self):
+        """Post physics step processing including arm updates."""
+        super().post_physics_step()
+        
+        # 更新末端执行器目标
+        self.update_curr_ee_goal()
+        
+        # 更新末端执行器状态
+        self.ee_pos = self.rigid_body_state[:, self.ee_idx, :3]
+        self.ee_orn = self.rigid_body_state[:, self.ee_idx, 3:7]
+        self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
+
+    def reset_idx(self, env_ids):
+        """Reset environments including arm-related states."""
+        super().reset_idx(env_ids)
+        
+        # 重置机械臂相关状态
+        self.arm_rew_buf[env_ids] = 0.
+        self.goal_timer[env_ids] = 0.
+        
+        # 重新采样末端执行器目标
+        self._resample_ee_goal(env_ids, is_init=True)
+
+    def step(self, actions):
+        """Step the environment with both leg and arm actions."""
+        # 确保动作维度正确
+        if actions.shape[-1] != self.num_actions:
+            raise ValueError(f"Expected {self.num_actions} actions, got {actions.shape[-1]}")
+        
+        # 调用父类的step方法
+        obs_buf, privileged_obs_buf, rew_buf, reset_buf, extras = super().step(actions)
+        
+        # 添加机械臂奖励到总奖励中
+        rew_buf += self.arm_rew_buf
+        
+        return obs_buf, privileged_obs_buf, rew_buf, reset_buf, extras
+
+    def _draw_debug_vis(self):
+        """Draw debug visualizations for arm."""
+        super()._draw_debug_vis()
+        
+        # 绘制末端执行器目标位置
+        sphere_geom = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(1, 1, 0))
+        transformed_target_ee = torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
+        
+        # 绘制当前末端执行器位置
+        sphere_geom_2 = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(0, 0, 1))
+        ee_pose = self.rigid_body_state[:, self.ee_idx, :3]
+        
+        for i in range(self.num_envs):
+            # 目标位置
+            sphere_pose = gymapi.Transform(gymapi.Vec3(transformed_target_ee[i, 0], transformed_target_ee[i, 1], transformed_target_ee[i, 2]), r=None)
+            gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose)
+            
+            # 当前位置
+            sphere_pose_2 = gymapi.Transform(gymapi.Vec3(ee_pose[i, 0], ee_pose[i, 1], ee_pose[i, 2]), r=None)
+            gymutil.draw_lines(sphere_geom_2, self.gym, self.viewer, self.envs[i], sphere_pose_2)
+
+    def _draw_ee_goal(self):
+        """Draw end-effector goal trajectory."""
+        sphere_geom = gymutil.WireframeSphereGeometry(0.005, 8, 8, None, color=(1, 0, 0))
+        
+        t = torch.linspace(0, 1, 10, device=self.device)[None, None, None, :]
+        ee_target_all_sphere = torch.lerp(self.ee_start_sphere[..., None], self.ee_goal_sphere[..., None], t).squeeze()
+        ee_target_all_cart_world = torch.zeros_like(ee_target_all_sphere)
+        
+        for i in range(10):
+            ee_target_cart = sphere2cart(ee_target_all_sphere[..., i])
+            ee_target_all_cart_world[..., i] = quat_apply(self.base_yaw_quat, ee_target_cart)
+        ee_target_all_cart_world += torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1)[:, :, None]
+        
+        for i in range(self.num_envs):
+            for j in range(10):
+                pose = gymapi.Transform(gymapi.Vec3(ee_target_all_cart_world[i, 0, j], ee_target_all_cart_world[i, 1, j], ee_target_all_cart_world[i, 2, j]), r=None)
+                gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], pose)
+
+    def get_observations(self):
+        """Get observations for RSL algorithm compatibility."""
+        # 确保观察缓冲区已更新
+        if self.obs_buf is None or self.obs_buf.shape[1] != self.num_obs:
+            self.compute_observations()
+        
+        return self.obs_buf
+
+    def get_privileged_observations(self):
+        """Get privileged observations for RSL algorithm compatibility."""
+        if self.privileged_obs_buf is not None:
+            return self.privileged_obs_buf
+        else:
+            return self.obs_buf
+
+    def get_rewards(self):
+        """Get rewards for RSL algorithm compatibility."""
+        return self.rew_buf
+
+    def get_arm_rewards(self):
+        """Get arm-specific rewards."""
+        return self.arm_rew_buf
+
+    def get_dones(self):
+        """Get done flags for RSL algorithm compatibility."""
+        return self.reset_buf
+
+    def get_extras(self):
+        """Get extra information for RSL algorithm compatibility."""
+        return self.extras
+
+    def get_num_leg_actions(self):
+        """Get number of leg actions for RSL algorithm."""
+        return 14  # 双足机器人：8个腿部关节 + 6个其他关节
+
+    def get_num_arm_actions(self):
+        """Get number of arm actions for RSL algorithm."""
+        return 6  # 6个机械臂关节
+
+    def get_num_actions(self):
+        """Get total number of actions."""
+        return self.num_actions
+
+    def get_num_observations(self):
+        """Get number of observations."""
+        return self.num_obs
+
+    def get_num_critic_observations(self):
+        """Get number of critic observations."""
+        return self.num_critic_obs
+
+    def get_num_privileged_obs(self):
+        """Get number of privileged observations."""
+        return self.num_privileged_obs
+
+    def get_obs_history_length(self):
+        """Get observation history length."""
+        return self.cfg.env.obs_history_length
+
+    def get_num_proprio(self):
+        """Get number of proprioceptive observations."""
+        return self.cfg.env.num_observations
+
+    def get_num_height_samples(self):
+        """Get number of height samples."""
+        return self.cfg.env.num_height_samples
+
+    def get_action_delay(self):
+        """Get action delay."""
+        return self.cfg.env.action_delay
+
+    def get_adaptive_arm_gains(self):
+        """Get whether adaptive arm gains are enabled."""
+        return self.cfg.control.adaptive_arm_gains
+
+    def get_adaptive_arm_gains_scale(self):
+        """Get adaptive arm gains scale."""
+        return 0.1  # 默认值，可以在配置中设置
+
+    def get_leg_control_head_hidden_dims(self):
+        """Get leg control head hidden dimensions."""
+        return [128, 64]  # 默认值，可以在配置中设置
+
+    def get_arm_control_head_hidden_dims(self):
+        """Get arm control head hidden dimensions."""
+        return [128, 64]  # 默认值，可以在配置中设置
+
+    def get_priv_encoder_dims(self):
+        """Get privileged encoder dimensions."""
+        return [64, 20]  # 默认值，可以在配置中设置
+
+    def get_num_hist(self):
+        """Get number of history steps."""
+        return self.cfg.env.obs_history_length
+
+    def get_num_prop(self):
+        """Get number of proprioceptive observations."""
+        return self.cfg.env.num_observations
+
+    def get_num_priv(self):
+        """Get number of privileged observations."""
+        return self.num_privileged_obs - self.cfg.env.num_observations
+
+    def get_num_actor_obs(self):
+        """Get number of actor observations."""
+        return self.num_obs
+
+    def get_num_critic_obs(self):
+        """Get number of critic observations."""
+        return self.num_critic_obs
+
+    def get_num_actions_total(self):
+        """Get total number of actions."""
+        return self.num_actions
+
+    def get_activation(self):
+        """Get activation function."""
+        return "elu"  # 默认值，可以在配置中设置
+
+    def get_init_std(self):
+        """Get initial standard deviation."""
+        return 1.0  # 默认值，可以在配置中设置
+
+    def get_actor_hidden_dims(self):
+        """Get actor hidden dimensions."""
+        return [512, 256, 128]  # 默认值，可以在配置中设置
+
+    def get_critic_hidden_dims(self):
+        """Get critic hidden dimensions."""
+        return [512, 256, 128]  # 默认值，可以在配置中设置
+
+    def get_priv_encoder_dims_config(self):
+        """Get privileged encoder dimensions from config."""
+        return [64, 20]  # 默认值，可以在配置中设置
+
+    def get_num_hist_config(self):
+        """Get number of history steps from config."""
+        return self.cfg.env.obs_history_length
+
+    def get_num_prop_config(self):
+        """Get number of proprioceptive observations from config."""
+        return self.cfg.env.num_observations
+
+    def get_num_priv_config(self):
+        """Get number of privileged observations from config."""
+        return self.num_privileged_obs - self.cfg.env.num_observations
+
+    def get_num_actor_obs_config(self):
+        """Get number of actor observations from config."""
+        return self.num_obs
+
+    def get_num_critic_obs_config(self):
+        """Get number of critic observations from config."""
+        return self.num_critic_obs
+
+    def get_num_actions_total_config(self):
+        """Get total number of actions from config."""
+        return self.num_actions
+
+    def get_activation_config(self):
+        """Get activation function from config."""
+        return "elu"  # 默认值，可以在配置中设置
+
+    def get_init_std_config(self):
+        """Get initial standard deviation from config."""
+        return 1.0  # 默认值，可以在配置中设置
+
+    def get_actor_hidden_dims_config(self):
+        """Get actor hidden dimensions from config."""
+        return [512, 256, 128]  # 默认值，可以在配置中设置
+
+    def get_critic_hidden_dims_config(self):
+        """Get critic hidden dimensions from config."""
+        return [512, 256, 128]  # 默认值，可以在配置中设置
+
+    def get_leg_control_head_hidden_dims_config(self):
+        """Get leg control head hidden dimensions from config."""
+        return [128, 64]  # 默认值，可以在配置中设置
+
+    def get_arm_control_head_hidden_dims_config(self):
+        """Get arm control head hidden dimensions from config."""
+        return [128, 64]  # 默认值，可以在配置中设置
+
+    def get_priv_encoder_dims_config(self):
+        """Get privileged encoder dimensions from config."""
+        return [64, 20]  # 默认值，可以在配置中设置
+
+    def get_adaptive_arm_gains_config(self):
+        """Get adaptive arm gains from config."""
+        return self.cfg.control.adaptive_arm_gains
+
+    def get_adaptive_arm_gains_scale_config(self):
+        """Get adaptive arm gains scale from config."""
+        return 0.1  # 默认值，可以在配置中设置

@@ -1,0 +1,389 @@
+# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+
+from legged_gym.envs.solefoot_flat.solefoot_flat_config import BipedCfgSF, BipedCfgPPOSF
+from legged_gym.envs.base.base_config import BaseConfig
+
+class BipedCfgSFWithArm(BipedCfgSF):
+    class env:
+        num_envs = 4096
+        num_observations = 60  # 54 + 6 (arm joint positions)
+        num_critic_observations = 3 + num_observations
+        num_height_samples = 187
+        num_privileged_obs = (
+            num_observations + 3 + 12 + num_height_samples + 6 + 20 + 6
+        )
+        num_actions = 20  # 14 (legs) + 6 (arm)
+        ee_idx = 10
+        env_spacing = 3.0
+        send_timeouts = True
+        episode_length_s = 20
+        obs_history_length = 5
+        dof_vel_use_pos_diff = True
+        fail_to_terminal_time_s = 0.5
+        action_delay = 0  # 动作延迟
+
+        # privileged obs flags
+        priv_observe_friction = True
+        priv_observe_friction_indep = True
+        priv_observe_ground_friction = False
+        priv_observe_ground_friction_per_foot = False
+        priv_observe_restitution = True
+        priv_observe_base_mass = True
+        priv_observe_com_displacement = True
+        priv_observe_motor_strength = False
+        priv_observe_motor_offset = False
+        priv_observe_joint_friction = True
+        priv_observe_Kp_factor = True
+        priv_observe_Kd_factor = True
+        priv_observe_contact_forces = False
+        priv_observe_contact_states = False
+        priv_observe_body_velocity = False
+        priv_observe_foot_height = False
+        priv_observe_body_height = False
+        priv_observe_gravity = False
+        priv_observe_terrain_type = False
+        priv_observe_clock_inputs = False
+        priv_observe_doubletime_clock_inputs = False
+        priv_observe_halftime_clock_inputs = False
+        priv_observe_desired_contact_states = False
+        priv_observe_dummy_variable = False
+
+    class goal_ee:
+        command_mode = 'cart'  # 'cart' or 'sphere'
+        traj_time = [2.0, 4.0]  # 轨迹时间范围
+        hold_time = [1.0, 2.0]  # 保持时间范围
+        collision_lower_limits = [-0.5, -0.5, 0.0]  # 碰撞检测下限
+        collision_upper_limits = [0.5, 0.5, 0.8]  # 碰撞检测上限
+        underground_limit = -0.1  # 地下限制
+        num_collision_check_samples = 10  # 碰撞检测采样数
+        sphere_error_scale = [1.0, 1.0, 1.0]  # 球坐标系误差缩放
+        orn_error_scale = [1.0, 1.0, 1.0]  # 姿态误差缩放
+        
+        class ranges:
+            init_pos_l = [0.1, 0.3]  # 初始长度范围
+            init_pos_p = [-0.2, 0.2]  # 初始俯仰范围
+            init_pos_y = [-0.2, 0.2]  # 初始偏航范围
+            final_pos_l = [0.2, 0.4]  # 最终长度范围
+            final_pos_p = [-0.3, 0.3]  # 最终俯仰范围
+            final_pos_y = [-0.3, 0.3]  # 最终偏航范围
+            final_delta_orn = [[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.1]]  # 最终姿态变化范围
+            final_tracking_ee_reward = 1.0  # 最终跟踪奖励
+        
+        l_schedule = [0, 1000]  # 长度课程学习
+        p_schedule = [0, 1000]  # 俯仰课程学习
+        y_schedule = [0, 1000]  # 偏航课程学习
+        tracking_ee_reward_schedule = [0, 1000]  # 跟踪奖励课程学习
+
+    class arm:
+        osc_kp = [100.0, 100.0, 100.0, 50.0, 50.0, 50.0]  # 操作空间控制Kp
+        osc_kd = [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]  # 操作空间控制Kd
+        grasp_offset = 0.05  # 抓取偏移
+        init_target_ee_base = [0.2, 0.0, 0.3]  # 初始目标末端执行器位置
+
+    class init_state:
+        pos = [0.0, 0.0, 0.8]
+        rot = [0.0, 0.0, 0.0, 1.0]
+        lin_vel = [0.0, 0.0, 0.0]
+        ang_vel = [0.0, 0.0, 0.0]
+        default_joint_angles = {
+            # 双足关节
+            "abad_L_Joint": 0.0,
+            "hip_L_Joint": 0.0,
+            "knee_L_Joint": 0.0,
+            "ankle_L_Joint": 0.0,
+            "abad_R_Joint": 0.0,
+            "hip_R_Joint": 0.0,
+            "knee_R_Joint": 0.0,
+            "ankle_R_Joint": 0.0,
+            # 机械臂关节
+            "J1": 0.0,    # 肩部旋转
+            "J2": 0.0,    # 肩部俯仰
+            "J3": 0.0,    # 肘部
+            "J4": 0.0,    # 腕部俯仰
+            "J5": 0.0,    # 腕部偏航
+            "J6": 0.0,    # 腕部旋转
+        }
+
+    class control:
+        action_scale = 0.25
+        control_type = "P"
+        adaptive_arm_gains = False  # 是否使用自适应机械臂增益
+        torque_supervision = False  # 是否使用力矩监督
+        
+        stiffness = {
+            # 双足关节
+            "abad_L_Joint": 10,
+            "hip_L_Joint": 10,
+            "knee_L_Joint": 10,
+            "ankle_L_Joint": 10,
+            "abad_R_Joint": 10,
+            "hip_R_Joint": 10,
+            "knee_R_Joint": 10,
+            "ankle_R_Joint": 10,
+            # 机械臂关节
+            "J1": 20,
+            "J2": 20,
+            "J3": 20,
+            "J4": 20,
+            "J5": 20,
+            "J6": 20,
+        }
+        
+        damping = {
+            # 双足关节
+            "abad_L_Joint": 0.2,
+            "hip_L_Joint": 0.2,
+            "knee_L_Joint": 0.2,
+            "ankle_L_Joint": 10,
+            "abad_R_Joint": 0.2,
+            "hip_R_Joint": 0.2,
+            "knee_R_Joint": 0.2,
+            "ankle_R_Joint": 10,
+            # 机械臂关节
+            "J1": 0.5,
+            "J2": 0.5,
+            "J3": 0.5,
+            "J4": 0.5,
+            "J5": 0.5,
+            "J6": 0.5,
+        }
+        
+        decimation = 4
+        user_torque_limit = 80.0
+        max_power = 1000.0
+
+    class asset:
+        file = "{LEGGED_GYM_ROOT_DIR}/resources/robots/SF_TRON1A/urdf/robot.urdf"
+        name = "solefoot_flat_with_arm"
+        foot_name = "ankle"
+        foot_radius = 0.00
+        penalize_contacts_on = ["knee", "hip"]
+        terminate_after_contacts_on = ["abad", "base"]
+        disable_gravity = False
+        collapse_fixed_joints = True
+        fix_base_link = False
+        default_dof_drive_mode = 3
+        self_collisions = 0
+        replace_cylinder_with_capsule = True
+        flip_visual_attachments = False
+        density = 0.001
+        angular_damping = 0.0
+        linear_damping = 0.0
+        max_angular_velocity = 1000.0
+        max_linear_velocity = 1000.0
+        armature = 0.0
+        thickness = 0.01
+
+    class domain_rand:
+        randomize_friction = False
+        friction_range = [0.2, 1.5]
+        randomize_restitution = False
+        restitution_range = [0.0, 1.0]
+        randomize_base_mass = False
+        added_mass_range = [-4., 4.]
+        randomize_base_com = False
+        rand_com_vec = [0.03, 0.02, 0.03]
+        randomize_inertia = False
+        randomize_inertia_range = [0.8, 1.2]
+        push_robots = False
+        push_interval_s = 15
+        max_push_vel_xy = 1.0
+        rand_force = False
+        force_resampling_time_s = 15
+        max_force = 50.0
+        rand_force_curriculum_level = 0
+        randomize_Kp = False
+        randomize_Kp_range = [0.8, 1.2]
+        randomize_Kd = False
+        randomize_Kd_range = [0.8, 1.2]
+        randomize_motor_torque = False
+        randomize_motor_torque_range = [0.8, 1.2]
+        randomize_default_dof_pos = False
+        randomize_default_dof_pos_range = [-0.05, 0.05]
+        randomize_action_delay = False
+        randomize_imu_offset = False
+        delay_ms_range = [0, 20]
+
+    class rewards:
+        class scales:
+            # 腿部奖励
+            termination = -0.0
+            tracking_lin_vel = 2.0
+            tracking_ang_vel = 0.5
+            lin_vel_z = -0.0
+            ang_vel_xy = -0.0
+            orientation = -0.5
+            torques = -0.0002
+            dof_vel = -0.0
+            dof_acc = -2.5e-8
+            base_height = -0.2
+            feet_air_time = 1.0
+            collision = -1.0
+            feet_stumble = -0.0
+            action_rate = -0.01
+            stand_still = -0.0
+            dof_pos_limits = -10.0
+            
+            # 机械臂奖励
+            tracking_ee_cart = 1.0
+            tracking_ee_sphere = 1.0
+            tracking_ee_orn = 0.5
+            arm_energy_abs_sum = -0.0001
+
+        only_positive_rewards = True
+        clip_reward = 100
+        clip_single_reward = 5
+        tracking_sigma = 0.2
+        ang_tracking_sigma = 0.25
+        height_tracking_sigma = 0.01
+        tracking_ee_sigma = 0.1  # 末端执行器跟踪sigma
+        soft_dof_pos_limit = 0.95
+        soft_dof_vel_limit = 1.0
+        soft_torque_limit = 0.8
+        base_height_target = 0.75
+        feet_height_target = 0.10
+        min_feet_distance = 0.20
+        max_contact_force = 100.0
+        kappa_gait_probs = 0.05
+        gait_force_sigma = 25.0
+        gait_vel_sigma = 0.25
+        gait_height_sigma = 0.005
+        about_landing_threshold = 0.05
+
+    class normalization:
+        class obs_scales:
+            lin_vel = 2.0
+            ang_vel = 0.25
+            dof_pos = 1.0
+            dof_vel = 0.05
+            dof_acc = 0.0025
+            height_measurements = 5.0
+            contact_forces = 0.01
+            torque = 0.05
+            base_z = 1./0.6565
+
+        clip_observations = 100.0
+        clip_actions = 100.0
+
+    class noise:
+        add_noise = True
+        noise_level = 1.5
+        
+        class noise_scales:
+            dof_pos = 0.01
+            dof_vel = 1.5
+            lin_vel = 0.1
+            ang_vel = 0.2
+            gravity = 0.05
+            height_measurements = 0.1
+
+    class viewer:
+        ref_env = 0
+        pos = [5, -5, 3]
+        lookat = [0, 0, 0]
+        realtime_plot = True
+
+    class sim:
+        dt = 0.0025
+        substeps = 1
+        gravity = [0.0, 0.0, -9.81]
+        up_axis = 1
+        
+        class physx:
+            num_threads = 0
+            solver_type = 1
+            num_position_iterations = 4
+            num_velocity_iterations = 0
+            contact_offset = 0.01
+            rest_offset = 0.0
+            bounce_threshold_velocity = 0.5
+            max_depenetration_velocity = 1.0
+            max_gpu_contact_pairs = 2**23
+            default_buffer_size_multiplier = 5
+            contact_collection = 2
+
+    class termination:
+        z_threshold = 0.3  # 终止高度阈值
+
+class BipedCfgPPOSFWithArm(BipedCfgPPOSF):
+    seed = 1
+    runner_class_name = "OnPolicyRunner"
+    
+    class MLP_Encoder:
+        output_detach = True
+        num_input_dim = (BipedCfgSFWithArm.env.num_observations + BipedCfgSFWithArm.env.num_height_samples) * BipedCfgSFWithArm.env.obs_history_length
+        num_output_dim = 3
+        hidden_dims = [256, 128]
+        activation = "elu"
+        orthogonal_init = False
+        encoder_des = "Base linear velocity"
+
+    class policy:
+        init_noise_std = 1.0
+        actor_hidden_dims = [512, 256, 128]
+        critic_hidden_dims = [512, 256, 128]
+        activation = "elu"
+        orthogonal_init = False
+        fix_std_noise_value = None
+
+    class algorithm:
+        value_loss_coef = 1.0
+        use_clipped_value_loss = True
+        clip_param = 0.2
+        entropy_coef = 0.01
+        num_learning_epochs = 5
+        num_mini_batches = 4
+        learning_rate = 1.0e-3
+        schedule = "adaptive"
+        gamma = 0.99
+        lam = 0.95
+        desired_kl = 0.01
+        max_grad_norm = 1.0
+        est_learning_rate = 1.0e-3
+        ts_learning_rate = 1.0e-4
+        critic_take_latent = True
+
+    class runner:
+        encoder_class_name = "MLP_Encoder"
+        policy_class_name = "ActorCritic"
+        algorithm_class_name = "PPO"
+        num_steps_per_env = 24
+        max_iterations = 10000
+        logger = "tensorboard"
+        exptid = ""
+        wandb_project = "legged_gym_SF_with_arm"
+        save_interval = 500
+        experiment_name = "SF_TRON1A_with_arm"
+        run_name = ""
+        resume = False
+        load_run = -1
+        checkpoint = -1
+        resume_path = None 
