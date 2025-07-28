@@ -278,6 +278,12 @@ def export_mlp_as_onnx(mlp, path, name, input_dim):
     print("Exported policy as onnx script to: ", path)
 
 
+def get_scale_shift(range):
+    scale = 2. / (range[1] - range[0])
+    shift = (range[1] + range[0]) / 2.
+    return scale, shift
+
+
 class PolicyExporterLSTM(torch.nn.Module):
     def __init__(self, actor_critic):
         super().__init__()
