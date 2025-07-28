@@ -28,11 +28,7 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
-import torch
-from torch import Tensor
-from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
-
 from legged_gym import LEGGED_GYM_ROOT_DIR, envs
 from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.terrain import Terrain
@@ -44,6 +40,10 @@ from legged_gym.utils.math import (
     torch_rand_sqrt_float, CubicSpline
 )
 from .solefoot_flat_config import BipedCfgSF
+
+import torch
+from torch import Tensor
+from isaacgym.torch_utils import *
 
 import math
 from time import time
@@ -74,8 +74,8 @@ class BipedSF(BaseTask):
         self.sim_params = sim_params
         self.height_samples = None
         self.init_done = False
-        self._parse_cfg(self.cfg)
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
+        self._parse_cfg(self.cfg)  # 放到super().__init__后
         self.pi = torch.acos(torch.zeros(1, device=self.device)) * 2
 
         self.group_idx = torch.arange(0, self.num_envs)
@@ -282,6 +282,7 @@ class BipedSF(BaseTask):
 
         # save body names from the asset
         body_names = self.gym.get_asset_rigid_body_names(robot_asset)
+        self.body_names_to_idx = {name: i for i, name in enumerate(body_names)}
         self.dof_names = self.gym.get_asset_dof_names(robot_asset)
         self.num_bodies = len(body_names)
         self.num_dofs = len(self.dof_names)
@@ -652,22 +653,23 @@ class BipedSF(BaseTask):
                 Args:
                     env_ids (List[int]): Environments ids for which new commands are needed
                 """
-        self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][env_ids, 1]
-                                     - self.command_ranges["lin_vel_x"][env_ids, 0]) \
+        print(self.command_ranges["lin_vel_x"])
+        self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][1]
+                                     - self.command_ranges["lin_vel_x"][0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["lin_vel_x"][env_ids, 0]
-        self.commands[env_ids, 1] = (self.command_ranges["lin_vel_y"][env_ids, 1]
-                                     - self.command_ranges["lin_vel_y"][env_ids, 0]) \
+                                    + self.command_ranges["lin_vel_x"][0]
+        self.commands[env_ids, 1] = (self.command_ranges["lin_vel_y"][1]
+                                     - self.command_ranges["lin_vel_y"][0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["lin_vel_y"][env_ids, 0]
-        self.commands[env_ids, 2] = (self.command_ranges["ang_vel_yaw"][env_ids, 1]
-                                     - self.command_ranges["ang_vel_yaw"][env_ids, 0]) \
+                                    + self.command_ranges["lin_vel_y"][0]
+        self.commands[env_ids, 2] = (self.command_ranges["ang_vel_yaw"][1]
+                                     - self.command_ranges["ang_vel_yaw"][0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["ang_vel_yaw"][env_ids, 0]
-        self.commands[env_ids, 3] = (self.command_ranges["base_height"][env_ids, 1]
-                                     - self.command_ranges["base_height"][env_ids, 0]) \
+                                    + self.command_ranges["ang_vel_yaw"][0]
+        self.commands[env_ids, 3] = (self.command_ranges["base_height"][1]
+                                     - self.command_ranges["base_height"][0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["base_height"][env_ids, 0]
+                                    + self.command_ranges["base_height"][0]
 
         self._resample_stand_still_commands(env_ids, is_start)
 

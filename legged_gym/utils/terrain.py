@@ -34,6 +34,31 @@ from scipy import interpolate
 
 from isaacgym import terrain_utils
 
+
+class Terrain_Perlin:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.xSize = int(cfg.horizontal_scale * cfg.tot_cols)
+        self.ySize = int(cfg.horizontal_scale * cfg.tot_rows)
+        assert(self.xSize == cfg.horizontal_scale * cfg.tot_cols and self.ySize == cfg.horizontal_scale * cfg.tot_rows)
+        self.tot_cols = cfg.tot_cols
+        self.tot_rows = cfg.tot_rows
+        self.heightsamples_float = self.generate_fractal_noise_2d(self.xSize, self.ySize, self.tot_cols, self.tot_rows, zScale=cfg.zScale)
+        self.heightsamples_float[self.tot_cols//2 - 100:, :] += 100000
+        # self.heightsamples_float[self.tot_cols//2 - 40: self.tot_cols//2 + 40, :] = np.mean(self.heightsamples_float)
+        self.heightsamples = (self.heightsamples_float * (1 / cfg.vertical_scale)).astype(np.int16)
+        
+
+        print("Terrain heightsamples shape: ", self.heightsamples.shape)
+        print("Terrain heightsamples stat: ", np.array([np.min(self.heightsamples), np.max(self.heightsamples), np.mean(self.heightsamples), np.std(self.heightsamples), np.median(self.heightsamples)]) * cfg.vertical_scale)
+        # self.heightsamples = np.zeros((800, 800)).astype(np.int16)
+        self.vertices, self.triangles = terrain_utils.convert_heightfield_to_trimesh(   self.heightsamples,
+                                                                                        cfg.horizontal_scale,
+                                                                                        cfg.vertical_scale,
+                                                                                        cfg.slope_treshold)
+                                                                                        
+
+
 class Terrain:
     def __init__(self, cfg, num_robots) -> None:
         self.cfg = cfg

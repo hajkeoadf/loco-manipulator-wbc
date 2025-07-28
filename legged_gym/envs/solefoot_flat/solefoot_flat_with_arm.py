@@ -32,11 +32,10 @@ import time
 import numpy as np
 import os
 
-from isaacgym.torch_utils import *
 from isaacgym import gymtorch, gymapi, gymutil
-from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float, torch_wrap_to_pi_minuspi, euler_from_quat, quat_from_euler_xyz
+from isaacgym.torch_utils import *
+# from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float, quat_from_euler_xyz
 
-import torch
 from typing import Tuple, Dict
 
 from legged_gym.envs.solefoot_flat.solefoot_flat import BipedSF
@@ -44,6 +43,8 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.helpers import class_to_dict
 from legged_gym.utils.terrain import Terrain, Terrain_Perlin
 from .solefoot_flat_with_arm_config import BipedCfgSFWithArm
+
+import torch
 
 def cart2sphere(cart):
     """Convert cartesian coordinates to spherical coordinates"""
@@ -76,6 +77,11 @@ def orientation_error(desired, current):
 
 class BipedSFWithArm(BipedSF):
     cfg: BipedCfgSFWithArm
+
+    def __init__(self, cfg, sim_params, physics_engine, sim_device, headless):
+        super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
+        self._parse_cfg(self.cfg)
+        self._init_arm_variables()
 
     def _get_noise_scale_vec(self, cfg):
         """Sets a vector used to scale the noise added to the observations."""
@@ -141,14 +147,10 @@ class BipedSFWithArm(BipedSF):
             self.arm_reward_functions.append(getattr(self, name))
 
     def _create_envs(self):
-        """Creates environments with robot and arm."""
         super()._create_envs()
         
         # 获取机械臂末端执行器索引
         self.ee_idx = self.body_names_to_idx.get("J6_Link", self.cfg.env.ee_idx)
-        
-        # 初始化机械臂相关变量
-        self._init_arm_variables()
 
     def _init_arm_variables(self):
         """Initialize arm-related variables."""
@@ -322,10 +324,12 @@ class BipedSFWithArm(BipedSF):
         # 获取基础观察
         super().compute_observations()
         
-        # 添加机械臂相关观察
+        # 添加机械臂相关观察：目标位置、目标姿态、关节角度、关节速度、上一时刻动作
         arm_obs = torch.cat([
-            self.curr_ee_goal,  # 当前目标位置 (3)
-            self.ee_goal_delta_orn_euler  # 目标姿态 (3)
+            self.curr_ee_goal,                # 目标位置 (3)
+            self.ee_goal_delta_orn_euler,     # 目标姿态 (3)
+            self.dof_pos[:, 14:],             # 机械臂关节角度 (6)
+            self.dof_vel[:, 14:]              # 机械臂关节速度 (6)
         ], dim=-1)
         
         # 组合观察

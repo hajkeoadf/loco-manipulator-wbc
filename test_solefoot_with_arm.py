@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-
-import torch
 import numpy as np
 import os
 import sys
+from isaacgym import gymapi
 
-# 添加路径
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# 添加路径 - 需要添加项目根目录到Python路径
+# current_dir = os.path.dirname(__file__)
+# project_root = os.path.join(current_dir, '..', '..')  # 回到项目根目录
+# sys.path.append(project_root)
+# sys.path.append(os.path.join(project_root, 'legged_gym'))
 
+# 先导入IsaacGym相关模块
 from legged_gym.envs.solefoot_flat.solefoot_flat_with_arm import BipedSFWithArm
 from legged_gym.envs.solefoot_flat.solefoot_flat_with_arm_config import BipedCfgSFWithArm
+
+# 在IsaacGym模块导入后再导入torch
+import torch
+
 
 def test_environment():
     """测试环境是否正常工作"""
@@ -20,17 +27,23 @@ def test_environment():
     
     # 减少环境数量用于测试
     cfg.env.num_envs = 4
+
+    # 模拟参数
+    sim_params = gymapi.SimParams()
+    sim_params.dt = 0.0025
+    sim_params.substeps = 1
+    sim_params.up_axis = gymapi.UP_AXIS_Z
+    sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.81)
+    
+    # 物理引擎
+    physics_engine = gymapi.SIM_PHYSX
+    sim_device = "cuda"
+    headless = False
     
     try:
         # 创建环境
         print("创建环境...")
-        env = BipedSFWithArm(
-            cfg=cfg,
-            sim_params=None,
-            physics_engine=None,
-            sim_device='cuda:0',
-            headless=False
-        )
+        env = BipedSFWithArm(cfg, sim_params, physics_engine, sim_device, headless)
         print("环境创建成功!")
         
         # 测试观察空间
@@ -77,16 +90,22 @@ def test_rsl_compatibility():
     # 创建配置
     cfg = BipedCfgSFWithArm()
     cfg.env.num_envs = 4
+
+    # 模拟参数
+    sim_params = gymapi.SimParams()
+    sim_params.dt = 0.0025
+    sim_params.substeps = 1
+    sim_params.up_axis = gymapi.UP_AXIS_Z
+    sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.81)
+    
+    # 物理引擎
+    physics_engine = gymapi.SIM_PHYSX
+    sim_device = "cuda"
+    headless = False
     
     try:
         # 创建环境
-        env = BipedSFWithArm(
-            cfg=cfg,
-            sim_params=None,
-            physics_engine=None,
-            sim_device='cuda:0',
-            headless=True  # 测试时不需要渲染
-        )
+        env = BipedSFWithArm(cfg, sim_params, physics_engine, sim_device, headless)
         
         # 测试RSL算法所需的接口
         print("测试RSL算法接口...")
