@@ -322,19 +322,42 @@ class BipedSFWithArm(BipedSF):
     def compute_observations(self):
         """Compute observations including arm-related ones."""
         # 获取基础观察
-        super().compute_observations()
-        
-        # 添加机械臂相关观察：目标位置、目标姿态、关节角度、关节速度、上一时刻动作
+        obs_buf, critic_obs_buf = super().compute_self_observations()
+
+        # 添加机械臂相关观察
         arm_obs = torch.cat([
-            self.curr_ee_goal,                # 目标位置 (3)
-            self.ee_goal_delta_orn_euler,     # 目标姿态 (3)
-            self.dof_pos[:, 14:],             # 机械臂关节角度 (6)
-            self.dof_vel[:, 14:]              # 机械臂关节速度 (6)
+            self.curr_ee_goal,  # 当前目标位置 (3)
+            self.ee_goal_delta_orn_euler  # 目标姿态 (3)
         ], dim=-1)
-        
+
         # 组合观察
-        self.obs_buf = torch.cat([self.obs_buf, arm_obs], dim=-1)
-        
+        obs_buf = torch.cat([obs_buf, arm_obs], dim=-1)
+
+        # 加入高度观测（如果有）
+        if self.cfg.terrain.measure_heights:
+            heights = (
+                torch.clip(
+                    self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
+                    -1,
+                    1.0,
+                )
+                * self.obs_scales.height_measurements
+            )
+            obs_buf = torch.cat((obs_buf, heights), dim=-1)
+
+        # 加噪声
+        if self.add_noise:
+            noise = (2 * torch.rand_like(obs_buf) - 1) * self._get_noise_scale_vec(self.cfg)
+            obs_buf = obs_buf + noise
+
+        self.obs_buf = obs_buf
+        self.critic_obs_buf = critic_obs_buf  # 如果有需要的话
+
+        # 历史观测
+        self.obs_history = torch.cat(
+            (self.obs_history[:, self.num_obs:], self.obs_buf), dim=-1
+        )
+
         return self.obs_buf
 
     def compute_reward(self):

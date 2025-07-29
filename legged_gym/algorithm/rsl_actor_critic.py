@@ -183,6 +183,7 @@ class ActorCritic(nn.Module):
                 
                 return actions, adaptive_gains
 
+            # !!!!要修改，传入的priv和hist不对
             def infer_priv_latent(self, obs):
                 return self.priv_encoder(obs)
 

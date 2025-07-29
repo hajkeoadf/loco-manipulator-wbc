@@ -203,32 +203,32 @@ class BipedCfgSFWithArm(BipedCfgSF):
         thickness = 0.01
 
     class domain_rand:
-        randomize_friction = False
-        friction_range = [0.2, 1.5]
-        randomize_restitution = False
+        randomize_friction = True
+        friction_range = [0.0, 1.6]
+        randomize_restitution = True
         restitution_range = [0.0, 1.0]
-        randomize_base_mass = False
-        added_mass_range = [-4., 4.]
-        randomize_base_com = False
+        randomize_base_mass = True
+        added_mass_range = [-0.5, 5]
+        randomize_base_com = True
         rand_com_vec = [0.03, 0.02, 0.03]
-        randomize_inertia = False
+        randomize_inertia = True
         randomize_inertia_range = [0.8, 1.2]
-        push_robots = False
-        push_interval_s = 15
+        push_robots = True
+        push_interval_s = 7
         max_push_vel_xy = 1.0
         rand_force = False
         force_resampling_time_s = 15
         max_force = 50.0
         rand_force_curriculum_level = 0
-        randomize_Kp = False
+        randomize_Kp = True
         randomize_Kp_range = [0.8, 1.2]
-        randomize_Kd = False
+        randomize_Kd = True
         randomize_Kd_range = [0.8, 1.2]
-        randomize_motor_torque = False
+        randomize_motor_torque = True
         randomize_motor_torque_range = [0.8, 1.2]
-        randomize_default_dof_pos = False
+        randomize_default_dof_pos = True
         randomize_default_dof_pos_range = [-0.05, 0.05]
-        randomize_action_delay = False
+        randomize_action_delay = True
         randomize_imu_offset = False
         delay_ms_range = [0, 20]
 
