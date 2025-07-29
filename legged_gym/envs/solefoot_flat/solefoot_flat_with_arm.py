@@ -490,7 +490,12 @@ class BipedSFWithArm(BipedSF):
         if self.obs_buf is None or self.obs_buf.shape[1] != self.num_obs:
             self.compute_observations()
         
-        return self.obs_buf
+        return (
+            self.obs_buf,
+            self.obs_history,
+            self.commands[:, :5] * self.commands_scale,  # 5维命令输出
+            self.critic_obs_buf
+        )
 
     def get_privileged_observations(self):
         """Get privileged observations for RSL algorithm compatibility."""

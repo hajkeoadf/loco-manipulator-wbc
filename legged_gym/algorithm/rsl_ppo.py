@@ -79,7 +79,7 @@ class RSLPPO:
 
         # Adaptation
         self.hist_encoder_optimizer = optim.Adam(
-            self.actor_critic.actor.history_encoder.parameters(), 
+            self.actor_critic.history_encoder.parameters(), 
             lr=learning_rate
         )
         self.priv_reg_coef_schedule = priv_reg_coef_schedule

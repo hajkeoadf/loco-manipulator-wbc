@@ -59,18 +59,40 @@ class RSLOnPolicyRunner:
         # 创建Actor-Critic网络
         actor_critic_class = eval(self.cfg["policy_class_name"])  # ActorCritic
         actor_critic: ActorCritic = actor_critic_class(
-            num_actor_obs=num_actor_obs,
-            num_critic_obs=num_critic_obs,
-            num_actions=num_actions,
-            **self.policy_cfg,
+            num_actor_obs=env.get_num_actor_obs(),
+            num_critic_obs=env.get_num_critic_obs(),
+            num_actions=env.get_num_actions_total(),
+            actor_hidden_dims=env.get_actor_hidden_dims(),
+            critic_hidden_dims=env.get_critic_hidden_dims(),
+            priv_encoder_dims=env.get_priv_encoder_dims(),
+            activation=env.get_activation(),
+            init_std=env.get_init_std(),
+            num_hist=env.get_num_hist(),
+            num_prop=env.get_num_prop(),
+            num_leg_actions=env.get_num_leg_actions(),
+            num_arm_actions=env.get_num_arm_actions(),
+            adaptive_arm_gains=env.get_adaptive_arm_gains(),
+            adaptive_arm_gains_scale=env.get_adaptive_arm_gains_scale(),
+            leg_control_head_hidden_dims=env.get_leg_control_head_hidden_dims(),
+            arm_control_head_hidden_dims=env.get_arm_control_head_hidden_dims()
         ).to(self.device)
 
         # 创建RSL PPO算法
         alg_class = eval(self.cfg["algorithm_class_name"])  # RSLPPO
         self.alg = alg_class(
             actor_critic=actor_critic,
-            device=self.device,
-            **self.alg_cfg,
+            value_loss_coef=self.alg_cfg['value_loss_coef'],  
+            use_clipped_value_loss=self.alg_cfg['use_clipped_value_loss'],
+            clip_param=self.alg_cfg['clip_param'],
+            entropy_coef=self.alg_cfg['entropy_coef'],
+            num_learning_epochs=self.alg_cfg['num_learning_epochs'],
+            num_mini_batches=self.alg_cfg['num_mini_batches'],
+            learning_rate=self.alg_cfg['learning_rate'],
+            schedule=self.alg_cfg['schedule'],
+            gamma=self.alg_cfg['gamma'],
+            lam=self.alg_cfg['lam'],
+            desired_kl=self.alg_cfg['desired_kl'],
+            max_grad_norm=self.alg_cfg['max_grad_norm']
         )
 
         self.num_steps_per_env = self.cfg["num_steps_per_env"]

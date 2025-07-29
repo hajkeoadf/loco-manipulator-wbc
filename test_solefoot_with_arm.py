@@ -12,7 +12,7 @@ from isaacgym import gymapi
 
 # 先导入IsaacGym相关模块
 from legged_gym.envs.solefoot_flat.solefoot_flat_with_arm import BipedSFWithArm
-from legged_gym.envs.solefoot_flat.solefoot_flat_with_arm_config import BipedCfgSFWithArm
+from legged_gym.envs.solefoot_flat.solefoot_flat_with_arm_config import BipedCfgSFWithArm, BipedCfgPPOSFWithArm
 
 # 在IsaacGym模块导入后再导入torch
 import torch

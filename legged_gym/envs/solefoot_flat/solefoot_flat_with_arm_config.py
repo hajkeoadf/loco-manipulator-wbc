@@ -45,7 +45,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
         env_spacing = 3.0
         send_timeouts = True
         episode_length_s = 20
-        obs_history_length = 5
+        obs_history_length = 10
         dof_vel_use_pos_diff = True
         fail_to_terminal_time_s = 0.5
         action_delay = 0  # 动作延迟
@@ -374,7 +374,7 @@ class BipedCfgPPOSFWithArm(BipedCfgPPOSF):
     class runner:
         encoder_class_name = "MLP_Encoder"
         policy_class_name = "ActorCritic"
-        algorithm_class_name = "PPO"
+        algorithm_class_name = "RSLPPO"
         num_steps_per_env = 24
         max_iterations = 10000
         logger = "tensorboard"
