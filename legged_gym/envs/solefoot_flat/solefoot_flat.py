@@ -526,19 +526,18 @@ class BipedSF(BaseTask):
     def compute_self_observations(self):
         """简化观测结构，参考airbot的实现"""
         # 参考airbot的观测结构
-        # 要改！！！需要把时钟加进去
         obs_buf = torch.cat((
             self.base_ang_vel * self.obs_scales.ang_vel, # base_ang_vel 是base的角速度, 3维
             self.projected_gravity, # 映射的重力, 3维
             (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos, # dof_pos是关节位置, 14维
             self.dof_vel * self.obs_scales.dof_vel, # dof_vel是关节速度, 14维
+            self.commands[:, :5] * self.commands_scale, # 命令, 5维
             self.actions, # 动作, 14维
             self.clock_inputs_sin.view(self.num_envs, 1), # 时钟, 1维   
             self.clock_inputs_cos.view(self.num_envs, 1), # 时钟, 1维
             self.gaits, # 步态, 4维
         ), dim=-1)
-        
-        # 计算critic观测
+
         critic_obs_buf = torch.cat((
             self.base_lin_vel * self.obs_scales.lin_vel, 
             obs_buf
@@ -547,17 +546,6 @@ class BipedSF(BaseTask):
         return obs_buf, critic_obs_buf
 
     def get_observations(self):
-        # # 确保obs_buf和obs_history包含完整的观测（包含高度测量）
-        # if self.obs_buf is None or self.obs_buf.shape[1] != self.num_obs:
-        #     # 如果obs_buf还没初始化，先reset一次
-        #     if hasattr(self, 'reset_idx') and callable(self.reset_idx):
-        #         import torch
-        #         env_ids = torch.arange(self.num_envs, device=self.device)
-        #         self.reset_idx(env_ids)
-        #     else:
-        #         self.compute_observations()
-        # elif self.obs_history is None or self.obs_history.shape[1] != self.num_obs * self.obs_history_length:
-        #     self.compute_observations()
         return (
             self.obs_buf,
             self.obs_history,
@@ -588,6 +576,7 @@ class BipedSF(BaseTask):
 
         if self.cfg.terrain.measure_heights or self.cfg.terrain.critic_measure_heights:
             self.measured_heights = self._get_heights()
+            print(f"self.measured_heights: {self.measured_heights}")
 
         self.base_height = torch.mean(
             self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1
@@ -738,7 +727,7 @@ class BipedSF(BaseTask):
         super()._init_buffers()
         
         # 重新设置num_obs为实际观测维度（包含高度测量）
-        self.num_obs = self.cfg.env.num_observations + self.cfg.env.num_height_samples  # 48 + 187 = 235
+        self.num_obs = self.cfg.env.num_observations
         
         # 重新初始化obs_history为正确的维度
         self.obs_history = torch.zeros(

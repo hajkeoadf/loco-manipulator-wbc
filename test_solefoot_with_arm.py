@@ -64,17 +64,19 @@ def test_environment():
             actions = torch.randn(env.num_envs, env.num_actions, device=env.device)
             
             # 执行步进
-            obs, privileged_obs, rewards, dones, extras = env.step(actions)
+            obs, privileged_obs, rewards, dones, _, _, _ = env.step(actions)
             
             print(f"步骤 {i+1}:")
             print(f"  观察形状: {obs.shape}")
             print(f"  奖励形状: {rewards.shape}")
-            print(f"  完成标志形状: {dones.shape}")
-            print(f"  平均奖励: {rewards.mean().item():.4f}")
+            print(f"  完成标志: {dones}")
+            print(f"  奖励: {rewards}")
+            # print(f"  完成标志形状: {dones.shape}")
+            # print(f"  平均奖励: {rewards.mean().item():.4f}")
             
-            # 检查是否有环境需要重置
-            if dones.any():
-                print(f"  有 {dones.sum().item()} 个环境需要重置")
+            # # 检查是否有环境需要重置
+            # if dones.any():
+            #     print(f"  有 {dones.sum().item()} 个环境需要重置")
         
         print("环境测试完成!")
         
@@ -159,4 +161,4 @@ def test_rsl_compatibility():
 
 if __name__ == "__main__":
     test_environment()
-    test_rsl_compatibility() 
+    # test_rsl_compatibility() 

@@ -34,7 +34,6 @@ import os
 
 from isaacgym import gymtorch, gymapi, gymutil
 from isaacgym.torch_utils import *
-# from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float, quat_from_euler_xyz
 
 from typing import Tuple, Dict
 
@@ -42,6 +41,7 @@ from legged_gym.envs.solefoot_flat.solefoot_flat import BipedSF
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.helpers import class_to_dict
 from legged_gym.utils.terrain import Terrain, Terrain_Perlin
+from legged_gym.utils.math import *
 from .solefoot_flat_with_arm_config import BipedCfgSFWithArm
 
 import torch
@@ -85,20 +85,33 @@ class BipedSFWithArm(BipedSF):
 
     def _get_noise_scale_vec(self, cfg):
         """Sets a vector used to scale the noise added to the observations."""
-        noise_vec = torch.zeros_like(self.obs_buf[0])
+        total_obs_dim = self.cfg.env.num_observations
+
+        # Add height measurements if enabled
+        if self.cfg.terrain.measure_heights:
+            total_obs_dim += self.cfg.env.num_height_samples
+            
+        noise_vec = torch.zeros(total_obs_dim, device=self.device, dtype=torch.float)
         self.add_noise = self.cfg.noise.add_noise
         noise_scales = self.cfg.noise.noise_scales
         noise_level = self.cfg.noise.noise_level
-        noise_vec[:3] = noise_scales.lin_vel * noise_level * self.obs_scales.lin_vel
-        noise_vec[3:6] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
-        noise_vec[6:9] = noise_scales.gravity * noise_level
-        noise_vec[9:12] = 0. # commands
-        noise_vec[12: 12 + self.num_dofs] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        noise_vec[12 + self.num_dofs: 12 + 2 * self.num_dofs] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        noise_vec[12 + 2 * self.num_dofs: 12 + 2 * self.num_dofs + self.num_actions] = 0. # previous actions
-        curr_idx = 12 + 2 * self.num_dofs + self.num_actions
+        
+        # Base observations (14 DOFs)
+        noise_vec[0:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
+        noise_vec[3:6] = noise_scales.gravity * noise_level
+        noise_vec[6:20] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # 14 DOFs
+        noise_vec[20:34] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel  # 14 DOFs
+        noise_vec[34:39] = 0.0  # commands (5)
+        noise_vec[39:53] = 0.0  # actions (14 DOFs)
+        noise_vec[53:59] = 0.0  # sin, cos and gaits
+        
+        # Arm observations (no noise for now)
+        noise_vec[59:65] = 0.0  # arm goal position and orientation
+        
+        # Height measurements if enabled
         if self.cfg.terrain.measure_heights:
-            noise_vec[curr_idx: curr_idx + 187] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+            noise_vec[65:] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+            
         return noise_vec
 
     def _parse_cfg(self, cfg):
@@ -129,6 +142,15 @@ class BipedSFWithArm(BipedSF):
     def _prepare_reward_function(self):
         """Prepares reward functions for both legs and arm."""
         super()._prepare_reward_function()
+        
+        # 确保episode_sums包含所有必要的键
+        if "termination" not in self.episode_sums:
+            self.episode_sums["termination"] = torch.zeros(
+                self.num_envs,
+                dtype=torch.float,
+                device=self.device,
+                requires_grad=False,
+            )
         
         # 添加机械臂奖励函数
         self.arm_reward_scales = class_to_dict(self.cfg.rewards.scales)
@@ -296,28 +318,8 @@ class BipedSFWithArm(BipedSF):
 
     def _compute_torques(self, actions):
         """Compute torques for both legs and arm."""
-        # 分离腿部和机械臂动作
-        leg_actions = actions[:, :14]  # 14个腿部关节
-        arm_actions = actions[:, 14:]  # 6个机械臂关节
-        
-        # 计算腿部力矩
-        leg_torques = super()._compute_torques(leg_actions)
-        
-        # 计算机械臂力矩
-        if self.cfg.control.adaptive_arm_gains:
-            arm_actions, delta_arm_gains = arm_actions[:, :6], arm_actions[:, 6:]
-            adaptive_arm_p_gains = self.p_gains[14:] + delta_arm_gains
-            adaptive_arm_d_gains = 2 * (adaptive_arm_p_gains ** 0.5)
-            arm_torques = (adaptive_arm_p_gains * (arm_actions + self.default_dof_pos[14:] - self.dof_pos[:, 14:]) - 
-                          adaptive_arm_d_gains * self.dof_vel[:, 14:])
-        else:
-            arm_torques = (self.p_gains[14:] * (arm_actions + self.default_dof_pos[14:] - self.dof_pos[:, 14:]) - 
-                          self.d_gains[14:] * self.dof_vel[:, 14:])
-        
-        # 组合所有力矩
-        torques = torch.cat([leg_torques, arm_torques], dim=-1)
-        
-        return torch.clip(torques, -self.torque_limits, self.torque_limits)
+        # 直接使用父类的计算方法，因为父类已经处理了所有14个DOF
+        return super()._compute_torques(actions)
 
     def compute_observations(self):
         """Compute observations including arm-related ones."""
@@ -332,9 +334,11 @@ class BipedSFWithArm(BipedSF):
 
         # 组合观察
         obs_buf = torch.cat([obs_buf, arm_obs], dim=-1)
+        print(f"obs_buf shape: {obs_buf.shape}")
 
         # 加入高度观测（如果有）
         if self.cfg.terrain.measure_heights:
+            print(f"self.measured_heights: {self.measured_heights}")    
             heights = (
                 torch.clip(
                     self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
@@ -344,10 +348,12 @@ class BipedSFWithArm(BipedSF):
                 * self.obs_scales.height_measurements
             )
             obs_buf = torch.cat((obs_buf, heights), dim=-1)
+        print(f"obs_buf shape: {obs_buf.shape}")
 
         # 加噪声
         if self.add_noise:
-            noise = (2 * torch.rand_like(obs_buf) - 1) * self._get_noise_scale_vec(self.cfg)
+            noise_scale_vec = self._get_noise_scale_vec(self.cfg)
+            noise = (2 * torch.rand_like(obs_buf) - 1) * noise_scale_vec
             obs_buf = obs_buf + noise
 
         self.obs_buf = obs_buf
@@ -432,12 +438,12 @@ class BipedSFWithArm(BipedSF):
             raise ValueError(f"Expected {self.num_actions} actions, got {actions.shape[-1]}")
         
         # 调用父类的step方法
-        obs_buf, privileged_obs_buf, rew_buf, reset_buf, extras = super().step(actions)
+        obs_buf, rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf = super().step(actions)
         
         # 添加机械臂奖励到总奖励中
         rew_buf += self.arm_rew_buf
         
-        return obs_buf, privileged_obs_buf, rew_buf, reset_buf, extras
+        return obs_buf, rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf
 
     def _draw_debug_vis(self):
         """Draw debug visualizations for arm."""
@@ -511,7 +517,7 @@ class BipedSFWithArm(BipedSF):
 
     def get_num_leg_actions(self):
         """Get number of leg actions for RSL algorithm."""
-        return 14  # 双足机器人：8个腿部关节 + 6个其他关节
+        return 8  # 8个腿部关节
 
     def get_num_arm_actions(self):
         """Get number of arm actions for RSL algorithm."""

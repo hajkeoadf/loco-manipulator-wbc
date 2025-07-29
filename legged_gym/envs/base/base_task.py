@@ -43,7 +43,8 @@ from legged_gym.utils.helpers import class_to_dict
 from legged_gym.utils.math import (
     quat_apply_yaw,
     wrap_to_pi,
-    torch_rand_sqrt_float,
+    euler_from_quat,
+    quat_from_euler_xyz,
 )
 
 # Base class for RL tasks
@@ -73,6 +74,7 @@ class BaseTask:
         self.num_envs = cfg.env.num_envs
         self.num_obs = cfg.env.num_observations
         self.num_critic_obs = cfg.env.num_critic_observations
+        self.num_privileged_obs = cfg.env.num_privileged_obs
 
         self.num_actions = cfg.env.num_actions
         self.obs_history_length = cfg.env.obs_history_length
@@ -114,6 +116,13 @@ class BaseTask:
         self.edge_reset_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.bool
         )
+        
+        # Initialize privileged observations buffer
+        if self.num_privileged_obs is not None:
+            self.privileged_obs_buf = torch.zeros(self.num_envs, self.num_privileged_obs, device=self.device, dtype=torch.float)
+        else:
+            self.privileged_obs_buf = None
+            
         self.extras = {}
 
         # create envs, sim and viewer
@@ -142,6 +151,9 @@ class BaseTask:
             self.commands[:, :3] * self.commands_scale,
             self.critic_obs_buf
         )
+    
+    def get_privileged_observations(self):
+        return self.privileged_obs_buf
 
     def reset_idx(self, env_ids):
         """Reset selected robots"""
@@ -1215,6 +1227,9 @@ class BaseTask:
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
         self.dof_acc = torch.zeros_like(self.dof_vel)
         self.base_quat = self.root_states[:, 3:7]
+        base_yaw = euler_from_quat(self.base_quat)[2]
+        self.base_yaw_euler = torch.cat([torch.zeros(self.num_envs, 2, device=self.device), base_yaw.view(-1, 1)], dim=1)
+        self.base_yaw_quat = quat_from_euler_xyz(torch.tensor(0), torch.tensor(0), base_yaw)
 
         rigid_body_state = self.gym.acquire_rigid_body_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)

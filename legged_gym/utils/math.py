@@ -42,6 +42,10 @@ def quat_apply_yaw(quat, vec):
     quat_yaw = normalize(quat_yaw)
     return quat_apply(quat_yaw, vec)
 
+def torch_wrap_to_pi_minuspi(angles):
+    angles = angles % (2 * np.pi)
+    angles -= 2 * np.pi * (angles > np.pi)
+    return angles
 
 # @ torch.jit.script
 def wrap_to_pi(angles):
@@ -49,6 +53,58 @@ def wrap_to_pi(angles):
     angles -= 2 * np.pi * (angles > np.pi)
     return angles
 
+def euler_from_quat(quat_angle):
+    """
+    + Convert a quaternion into euler angles (roll, pitch, yaw)
+    + roll is rotation around x in radians (counterclockwise)
+    + pitch is rotation around y in radians (counterclockwise)
+    + yaw is rotation around z in radians (counterclockwise)
+    """
+    x = quat_angle[:,0]; y = quat_angle[:,1]; z = quat_angle[:,2]; w = quat_angle[:,3]
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = torch.atan2(t0, t1)
+
+    t2 = +2.0 * (w * y - z * x)
+    t2 = torch.clip(t2, -1, 1)
+    pitch_y = torch.asin(t2)
+
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = torch.atan2(t3, t4)
+
+    return roll_x, pitch_y, yaw_z # in radians
+
+def quat_from_euler_xyz(roll, pitch, yaw):
+    """
+    Convert euler angles (roll, pitch, yaw) to quaternion
+    + roll is rotation around x in radians (counterclockwise)
+    + pitch is rotation around y in radians (counterclockwise)
+    + yaw is rotation around z in radians (counterclockwise)
+    """
+    # Convert to half angles
+    roll_half = roll * 0.5
+    pitch_half = pitch * 0.5
+    yaw_half = yaw * 0.5
+    
+    # Compute trigonometric functions
+    cr = torch.cos(roll_half)
+    sr = torch.sin(roll_half)
+    cp = torch.cos(pitch_half)
+    sp = torch.sin(pitch_half)
+    cy = torch.cos(yaw_half)
+    sy = torch.sin(yaw_half)
+    
+    # Compute quaternion components
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    
+    # Stack into quaternion tensor
+    quat = torch.stack([qx, qy, qz, qw], dim=-1)
+    
+    return quat
 
 # @ torch.jit.script
 def torch_rand_sqrt_float(lower, upper, shape, device):

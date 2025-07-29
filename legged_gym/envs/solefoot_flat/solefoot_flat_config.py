@@ -35,7 +35,7 @@ class BipedCfgSF(BaseConfig):
         num_envs = 4096  # 减少环境数量以提高稳定性
         # num_privileged_group = 0 # 4096
         # num_proprio_group = num_envs - num_privileged_group
-        num_observations = 54  # 修正观测空间维度：3(ang_vel) + 3(gravity) + 14(dof_pos) + 14(dof_vel) + 14(actions) + 1(clock_sin) + 1(clock_cos) + 4(gaits) = 54
+        num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5  # 修正观测空间维度：3(ang_vel) + 3(gravity) + 14(dof_pos) + 14(dof_vel) + 14(actions) + 1(clock_sin) + 1(clock_cos) + 4(gaits) + 5(commands)
         num_critic_observations = 3 + num_observations # add lin_vel to the front
         num_height_samples = 187  # 增加高度采样点
         num_privileged_obs = (
@@ -86,11 +86,9 @@ class BipedCfgSF(BaseConfig):
         dynamic_friction = 1.0  # 增加摩擦力
         restitution = 0.0  # 减少弹性
         # rough terrain only:
-        measure_heights = True  # 启用高度测量
+        measure_heights = False  # 启用高度测量
         critic_measure_heights = True
-        measured_points_x = [
-            -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8
-        ]  # 参考airbot的测量点配置
+        measured_points_x = [-0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]  # 参考airbot的测量点配置
         measured_points_y = [-0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5]
         selected = False  # select a unique terrain type and pass all arguments
         terrain_kwargs = None  # Dict of arguments for selected terrain
@@ -126,12 +124,12 @@ class BipedCfgSF(BaseConfig):
         zero_command_prob = 0.8
 
         class ranges:
-            lin_vel_x = [-1.0, 1.0]  # 参考airbot的速度范围
-            lin_vel_y = [-0.0, 0.0]  # 参考airbot的速度范围
-            ang_vel_yaw = [-0.0, 1.0]  # 参考airbot的速度范围
-            heading = [-3.14159, 3.14159]
-            base_height = [0.68, 0.78] # [0.40, 0.56] # TODO: lower than previous height
-            stand_still = [0, 1]
+            lin_vel_x = [-1.0, 1.5]  # x方向线速度（前进/后退）
+            lin_vel_y = [-1.0, 1.0]  # y方向线速度（横移）
+            ang_vel_yaw = [-1.0, 1.0]  # z轴角速度（原地转圈）
+            heading = [-3.14159, 3.14159] # 期望的朝向角
+            base_height = [0.68, 0.78] # 期望的base高度
+            stand_still = [0, 1] # 是否站立
 
     class gait:
         num_gait_params = 4

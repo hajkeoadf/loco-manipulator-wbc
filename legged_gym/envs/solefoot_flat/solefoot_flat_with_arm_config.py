@@ -34,13 +34,13 @@ from legged_gym.envs.base.base_config import BaseConfig
 class BipedCfgSFWithArm(BipedCfgSF):
     class env:
         num_envs = 4096
-        num_observations = 60  # 54 + 6 (arm joint positions)
+        num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
         num_critic_observations = 3 + num_observations
         num_height_samples = 187
         num_privileged_obs = (
             num_observations + 3 + 12 + num_height_samples + 6 + 20 + 6
         )
-        num_actions = 20  # 14 (legs) + 6 (arm)
+        num_actions = 14  # 8 (legs) + 6 (arm)
         ee_idx = 10
         env_spacing = 3.0
         send_timeouts = True
