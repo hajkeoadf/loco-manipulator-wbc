@@ -36,6 +36,7 @@ class RolloutStorage:
     class Transition:
         def __init__(self):
             self.observations = None
+            self.observations_history = None
             self.critic_observations = None
             self.actions = None
             self.rewards = None
@@ -52,7 +53,7 @@ class RolloutStorage:
         def clear(self):
             self.__init__()
 
-    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu'):
+    def __init__(self, num_envs, num_transitions_per_env, obs_shape, obs_hist_shape, privileged_obs_shape, actions_shape, device='cpu'):
 
         self.device = device
 
@@ -62,6 +63,7 @@ class RolloutStorage:
 
         # Core
         self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
+        self.observations_history = torch.zeros(num_transitions_per_env, num_envs, *obs_hist_shape, device=self.device)
         if privileged_obs_shape[0] is not None:
             self.privileged_observations = torch.zeros(num_transitions_per_env, num_envs, *privileged_obs_shape, device=self.device)
         else:
@@ -96,6 +98,7 @@ class RolloutStorage:
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
+        self.observations_history[self.step].copy_(transition.observations_history)
         if self.privileged_observations is not None: 
             self.privileged_observations[self.step].copy_(transition.critic_observations)
         self.actions[self.step].copy_(transition.actions)
@@ -160,6 +163,7 @@ class RolloutStorage:
         indices = torch.randperm(num_mini_batches * mini_batch_size, device=self.device)
 
         observations = self.observations.flatten(0, 1)
+        observations_history = self.observations_history.flatten(0, 1)
         if self.privileged_observations is not None:
             critic_observations = self.privileged_observations.flatten(0, 1)
         else:
@@ -184,6 +188,7 @@ class RolloutStorage:
                 batch_idx = indices[start:end]
 
                 obs_batch = observations[batch_idx]
+                obs_history_batch = observations_history[batch_idx]
                 critic_obs_batch = critic_observations[batch_idx]
                 actions_batch = actions[batch_idx]
                 target_values_batch = values[batch_idx]
@@ -198,7 +203,7 @@ class RolloutStorage:
                 current_arm_dof_pos_batch = current_arm_dof_pos[batch_idx]
                 current_arm_dof_vel_batch = current_arm_dof_vel[batch_idx]
 
-                yield obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
+                yield obs_batch, obs_history_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
                     old_mu_batch, old_sigma_batch, None, None, target_arm_torques_batch, current_arm_dof_pos_batch, current_arm_dof_vel_batch
 
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):

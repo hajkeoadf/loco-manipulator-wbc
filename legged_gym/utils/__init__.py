@@ -38,6 +38,7 @@ from .helpers import (
     update_class_from_dict,
 )
 from .task_registry import task_registry
+# from .rsl_task_registry import rsl_task_registry
 from .logger import Logger
 from .math import *
 from .terrain import Terrain

@@ -52,9 +52,9 @@ if robot_type.startswith("PF"):
         sys.exit(1)
 
 elif robot_type == "SF_TRON1A":
-    from legged_gym.envs.solefoot_flat.solefoot_flat import BipedSF
-    from legged_gym.envs.solefoot_flat.solefoot_flat_config import BipedCfgSF, BipedCfgPPOSF
-    task_registry.register("solefoot_flat", BipedSF, BipedCfgSF(), BipedCfgPPOSF())
+    from legged_gym.envs.solefoot_flat_with_arm.solefoot_flat_with_arm import BipedSFWithArm
+    from legged_gym.envs.solefoot_flat_with_arm.solefoot_flat_with_arm_config import BipedCfgSFWithArm, BipedCfgPPOSFWithArm
+    task_registry.register("solefoot_flat_with_arm", BipedSFWithArm, BipedCfgSFWithArm(), BipedCfgPPOSFWithArm())
 
 elif robot_type == "WF_TRON1A":
     from legged_gym.envs.wheelfoot_flat.wheelfoot_flat import BipedWF

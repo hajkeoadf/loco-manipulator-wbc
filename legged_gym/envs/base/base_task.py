@@ -73,6 +73,7 @@ class BaseTask:
 
         self.num_envs = cfg.env.num_envs
         self.num_obs = cfg.env.num_observations
+        self.num_priv = cfg.env.num_privileged_obs
         self.num_critic_obs = cfg.env.num_critic_observations
         self.num_privileged_obs = cfg.env.num_privileged_obs
 
@@ -86,12 +87,12 @@ class BaseTask:
 
         # allocate buffers
         self.obs_buf = torch.zeros(
-            self.num_envs, self.num_obs, device=self.device, dtype=torch.float
+            self.num_envs, self.num_obs+self.num_priv, device=self.device, dtype=torch.float
         )
         self.critic_obs_buf = torch.zeros(
-            self.num_envs, self.num_critic_obs, device=self.device, dtype=torch.float
+            self.num_envs, self.num_critic_obs+self.num_priv, device=self.device, dtype=torch.float
         )
-        self.obs_history = torch.zeros(
+        self.obs_history_buf = torch.zeros(
             self.num_envs,
             self.num_obs * self.obs_history_length,
             device=self.device,
@@ -147,7 +148,7 @@ class BaseTask:
     def get_observations(self):
         return (
             self.obs_buf,
-            self.obs_history,
+            self.obs_history_buf,
             self.commands[:, :3] * self.commands_scale,
             self.critic_obs_buf
         )
@@ -593,7 +594,8 @@ class BaseTask:
                 props[i].inertia.z.z *= inertia_scale
                 
         # 效仿widowGo1的实现，返回mass_params
-        mass_params = np.concatenate([rand_mass, rand_com])
+        # print(f"rand_mass: {rand_mass}, rand_com: {rand_com}")
+        mass_params = np.concatenate([[rand_mass], rand_com])
         return props, mass_params
 
     def _step_contact_targets(self):
@@ -1046,8 +1048,8 @@ class BaseTask:
                 2 * torch.rand_like(self.obs_buf) - 1
             ) * self.noise_scale_vec
 
-        self.obs_history = torch.cat(
-            (self.obs_history[:, self.num_obs :], self.obs_buf), dim=-1
+        self.obs_history_buf = torch.cat(
+            (self.obs_history_buf[:, self.num_obs :], self.obs_buf), dim=-1
         )
         # add imu noise if needed
         if self.cfg.domain_rand.randomize_imu_offset:

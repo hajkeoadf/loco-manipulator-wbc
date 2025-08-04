@@ -105,10 +105,26 @@ class BipedCfgSFWithArm(BipedCfgSF):
             final_tracking_ee_reward = 1.0  # 最终跟踪奖励
 
     class commands:
-        curriculum = True  # 启用命令课程学习
-        num_commands = 3
-        resampling_time = 3.0  # 命令重新采样时间[s]
-        curriculum_threshold = 0.75  # 课程学习阈值
+        curriculum = True
+        smooth_max_lin_vel_x = 2.0
+        smooth_max_lin_vel_y = 1.0
+        non_smooth_max_lin_vel_x = 1.0
+        non_smooth_max_lin_vel_y = 1.0
+        max_ang_vel_yaw = 3.0
+        curriculum_threshold = 0.75
+        num_commands = 5  # 命令数量：lin_vel_x, lin_vel_y, ang_vel_yaw, heading, stand_still
+        resampling_time = 10.0  # 增加重采样时间
+        heading_command = False  # if true: compute ang vel command from heading error, only work on adaptive group
+        min_norm = 0.1
+        zero_command_prob = 0.8
+
+        class ranges:
+            lin_vel_x = [-1.0, 1.5]  # x方向线速度（前进/后退）
+            lin_vel_y = [-1.0, 1.0]  # y方向线速度（横移）
+            ang_vel_yaw = [-1.0, 1.0]  # z轴角速度（原地转圈）
+            heading = [-3.14159, 3.14159] # 期望的朝向角
+            base_height = [0.68, 0.78] # 期望的base高度
+            stand_still = [0, 1] # 是否站立
 
     class arm:
         osc_kp = [100.0, 100.0, 100.0, 50.0, 50.0, 50.0]  # 操作空间控制Kp

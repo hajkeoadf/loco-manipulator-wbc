@@ -92,12 +92,16 @@ class ActorCritic(nn.Module):
                         activation='elu',
                         init_std=1,
                         num_hist=10,
+                        num_priv=4,
                         num_prop=48,
+                        device='cpu',
                         **kwargs):
         super(ActorCritic, self).__init__()
 
         self.num_prop = num_prop
         self.num_hist = num_hist
+        self.num_priv = num_priv
+        self.device = device
 
         activation = get_activation(activation)
 
@@ -117,7 +121,7 @@ class ActorCritic(nn.Module):
                          leg_control_head_hidden_dims, arm_control_head_hidden_dims,
                          num_leg_actions, num_arm_actions, adaptive_arm_gains, 
                          adaptive_arm_gains_scale, num_priv, num_hist, num_prop, priv_encoder_dims,
-                         priv_encoder, history_encoder):
+                         priv_encoder, history_encoder, device):
                 super(Actor, self).__init__()
                 
                 self.adaptive_arm_gains = adaptive_arm_gains
@@ -127,6 +131,7 @@ class ActorCritic(nn.Module):
                 self.num_prop = num_prop
                 self.priv_encoder = priv_encoder
                 self.history_encoder = history_encoder
+                self.device = device
                 
                 # Shared layers
                 shared_layers = []
@@ -171,16 +176,19 @@ class ActorCritic(nn.Module):
                     )
                 
                 # Action std
-                self.log_std = nn.Parameter(torch.ones(num_leg_actions + num_arm_actions) * np.log(init_std))
+                self.log_std = nn.Parameter(torch.ones(num_leg_actions + num_arm_actions, device=device) * np.log(init_std))
 
-            def forward(self, obs, hist_encoding=False):
+            def forward(self, obs, obs_history, hist_encoding=False):
                 # Get encoded features
                 shared_input = obs
                 if hist_encoding:
-                    latent = self.infer_hist_latent(obs)
+                    latent = self.infer_hist_latent(obs_history)
                 else:
                     latent = self.infer_priv_latent(obs)
+                print(f"latent shape: {latent.shape}")
+                
                 shared_input = torch.cat([shared_input, latent], dim=-1)
+                print(f"shared_input shape: {shared_input.shape}")
                 shared_features = self.shared(shared_input)
                 
                 # Generate actions
@@ -199,7 +207,7 @@ class ActorCritic(nn.Module):
             def infer_priv_latent(self, obs):
                 """
                 从观察数据中提取特权信息并编码
-                观察数据结构: [基础观察(57) + 机械臂观察(6) + 高度观测(187,可选) + 特权观察(4) + 历史观察(650)]
+                观察数据结构: [基础观察(57) + 机械臂观察(6) + 高度观测(187,可选) + 特权观察(4)]
                 """
                 # 计算各部分的位置
                 height_obs_dim = 187 if obs.shape[-1] > self.num_prop + self.num_priv + self.num_hist * self.num_prop else 0  # 高度观测维度
@@ -214,23 +222,8 @@ class ActorCritic(nn.Module):
                 # 编码特权信息
                 return self.priv_encoder(priv_obs)
 
-            def infer_hist_latent(self, obs):
-                """
-                从观察数据中提取历史信息并编码
-                观察数据结构: [基础观察(57) + 机械臂观察(6) + 高度观测(187,可选) + 特权观察(4) + 历史观察(650)]
-                """
-                height_obs_dim = 187 if obs.shape[-1] > self.num_prop + self.num_priv + self.num_hist * self.num_prop else 0  # 高度观测维度
-                
-                # 历史观察位置：在最后
-                hist_start = self.num_prop + height_obs_dim + self.num_priv
-                hist_end = hist_start + self.num_hist * self.num_prop
-                
-                # 提取历史观察并重塑为 (batch_size, num_hist, num_prop)
-                hist_obs = obs[:, hist_start:hist_end]
-                hist_obs_reshaped = hist_obs.reshape(-1, self.num_hist, self.num_prop)
-                
-                # 编码历史信息
-                return self.history_encoder(hist_obs_reshaped)
+            def infer_hist_latent(self, obs_history):
+                return self.history_encoder(obs_history)
 
         # Critic with separate value heads
         class Critic(nn.Module):
@@ -238,6 +231,10 @@ class ActorCritic(nn.Module):
                          leg_control_head_hidden_dims, arm_control_head_hidden_dims,
                          num_priv, num_hist, num_prop):
                 super(Critic, self).__init__()
+
+                self.num_priv = num_priv
+                self.num_hist = num_hist
+                self.num_prop = num_prop
                 
                 # Shared layers
                 shared_layers = []
@@ -288,13 +285,13 @@ class ActorCritic(nn.Module):
                 return values
 
         # Initialize actor and critic
-        mlp_input_dim_a = num_actor_obs + 64 + priv_encoder_dims[1]  # obs + hist + priv
-        mlp_input_dim_c = num_critic_obs + 64 + priv_encoder_dims[1]  # obs + hist + priv
+        mlp_input_dim_a = self.num_prop + 64  # obs + hist + priv
+        mlp_input_dim_c = self.num_prop + self.num_priv  # obs + hist + priv
         
         self.actor = Actor(mlp_input_dim_a, actor_hidden_dims, activation,
                           [128, 64], [128, 64], 8, 6,  # leg and arm action dimensions
                           True, 0.1, self.num_priv, self.num_hist, self.num_prop, priv_encoder_dims,
-                          self.priv_encoder, self.history_encoder)
+                          self.priv_encoder, self.history_encoder, self.device)
         
         self.critic = Critic(mlp_input_dim_c, critic_hidden_dims, activation,
                             [128, 64], [128, 64], priv_encoder_dims[1], self.num_hist, self.num_prop)
@@ -322,7 +319,7 @@ class ActorCritic(nn.Module):
     def entropy(self):
         return self.distribution.entropy().sum(dim=-1)
 
-    def update_distribution(self, observations, hist_encoding):
+    def update_distribution(self, observations, obs_history, hist_encoding):
         # # Process observations
         # prop_obs = observations[:, :self.num_prop]  # First 48 dimensions are proprioceptive
         # priv_obs = observations[:, self.num_prop:]  # Rest are privileged
@@ -335,15 +332,15 @@ class ActorCritic(nn.Module):
         # combined_obs = torch.cat([observations, hist_latent, priv_latent], dim=-1)
         
         # Get actions and adaptive gains
-        actions, adaptive_gains = self.actor(observations, hist_encoding)
+        actions, adaptive_gains = self.actor(observations, obs_history, hist_encoding)
         
         # Create distribution
         self.distribution = Normal(actions, self.actor.log_std.exp())
         
         return adaptive_gains
 
-    def act(self, observations, critic_observations, hist_encoding, hidden_states=None, masks=None):
-        adaptive_gains = self.update_distribution(observations, hist_encoding)
+    def act(self, observations, obs_history, critic_observations, hist_encoding, hidden_states=None, masks=None):
+        adaptive_gains = self.update_distribution(observations, obs_history, hist_encoding)
         actions = self.distribution.sample()
         actions_log_prob = self.distribution.log_prob(actions).sum(dim=-1)
         
@@ -355,8 +352,8 @@ class ActorCritic(nn.Module):
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, observations, hist_encoding=False):
-        adaptive_gains = self.update_distribution(observations, hist_encoding)
+    def act_inference(self, observations, obs_history=None, hist_encoding=False):
+        adaptive_gains = self.update_distribution(observations, obs_history, hist_encoding)
         return self.distribution.mean, adaptive_gains
 
     def evaluate(self, critic_observations, hidden_states=None, masks=None):

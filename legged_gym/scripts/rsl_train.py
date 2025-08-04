@@ -34,17 +34,17 @@ from datetime import datetime
 
 import isaacgym
 from legged_gym.envs import *
-from legged_gym.utils import get_args, rsl_task_registry
+from legged_gym.utils import get_args, task_registry
 import torch
 import matplotlib.pyplot as plt
 
 
 def train(args):
-    env, env_cfg = rsl_task_registry.make_env(name=args.task, args=args)
-    ppo_runner, train_cfg = rsl_task_registry.make_alg_runner(
+    env, env_cfg = task_registry.make_env(name=args.task, args=args)
+    ppo_runner, train_cfg = task_registry.make_alg_runner(
         env=env, name=args.task, args=args
     )
-    rsl_task_registry.save_cfgs(name=args.task)
+    task_registry.save_cfgs(name=args.task)
     ppo_runner.learn(
         num_learning_iterations=train_cfg.runner.max_iterations,
         init_at_random_ep_len=True,

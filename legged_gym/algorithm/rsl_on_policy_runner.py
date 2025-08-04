@@ -50,9 +50,11 @@ class RSLOnPolicyRunner:
         self.policy_cfg = train_cfg["policy"]
         self.device = device
         self.env = env
+        self.dagger_update_freq = self.alg_cfg['dagger_update_freq']
 
         # 获取观测维度
         num_actor_obs = self.env.num_obs
+        num_hist_obs = num_actor_obs * self.env.get_num_hist_config()
         num_critic_obs = self.env.num_critic_obs if hasattr(self.env, 'num_critic_obs') else self.env.num_obs
         num_actions = self.env.num_actions
 
@@ -68,13 +70,15 @@ class RSLOnPolicyRunner:
             activation=env.get_activation(),
             init_std=env.get_init_std(),
             num_hist=env.get_obs_history_length(),
-            num_prop=env.get_num_proprio_obs(),
+            num_priv=env.get_num_priv(),
+            num_prop=env.get_num_prop(),
             num_leg_actions=env.get_num_leg_actions(),
             num_arm_actions=env.get_num_arm_actions(),
             adaptive_arm_gains=env.get_adaptive_arm_gains(),
             adaptive_arm_gains_scale=env.get_adaptive_arm_gains_scale(),
             leg_control_head_hidden_dims=env.get_leg_control_head_hidden_dims(),
-            arm_control_head_hidden_dims=env.get_arm_control_head_hidden_dims()
+            arm_control_head_hidden_dims=env.get_arm_control_head_hidden_dims(),
+            device=self.device
         ).to(self.device)
 
         # 创建RSL PPO算法
@@ -94,8 +98,9 @@ class RSLOnPolicyRunner:
             desired_kl=self.alg_cfg['desired_kl'],
             max_grad_norm=self.alg_cfg['max_grad_norm'],
             mixing_schedule=self.alg_cfg['mixing_schedule'],
-            priv_reg_coef_schedual=self.alg_cfg['priv_reg_coef_schedual'],
-            dagger_update_freq=self.alg_cfg['dagger_update_freq']
+            priv_reg_coef_schedule=self.alg_cfg['priv_reg_coef_schedual'],
+            dagger_update_freq=self.alg_cfg['dagger_update_freq'],
+            device=self.device
         )
 
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -106,6 +111,7 @@ class RSLOnPolicyRunner:
             self.env.num_envs,
             self.num_steps_per_env,
             [num_actor_obs],
+            [num_hist_obs],
             [num_critic_obs],
             [num_actions],
         )
@@ -167,11 +173,13 @@ class RSLOnPolicyRunner:
 
         # 获取初始观测
         # 此处，事实上obs, critic_obs一模一样
-        obs, critic_obs = self.env.get_observations()
-        obs, critic_obs = (
+        obs, critic_obs, obs_history = self.env.get_observations()
+        obs, critic_obs, obs_history = (
             obs.to(self.device),
             critic_obs.to(self.device),
+            obs_history.to(self.device),
         )
+        print(f"obs shape in on policy runner: {obs.shape}")
 
         self.alg.actor_critic.train()  # 切换到训练模式
 
@@ -200,16 +208,15 @@ class RSLOnPolicyRunner:
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
                     # 获取动作
-                    actions, actions_log_prob, values, adaptive_gains = self.alg.act(obs, critic_obs, hist_encoding)
+                    actions, actions_log_prob, values, adaptive_gains = self.alg.act(obs, obs_history, critic_obs, hist_encoding)
                     
                     # 环境步进
-                    (obs, leg_rewards, arm_rewards, dones, infos, critic_obs_buf) = self.env.step(actions)
+                    (obs, leg_rewards, arm_rewards, dones, infos, obs_history,critic_obs) = self.env.step(actions)
                     
-                    obs, obs_history, commands, critic_obs, leg_rewards, arm_rewards, dones = (
+                    obs, obs_history, critic_obs, leg_rewards, arm_rewards, dones = (
                         obs.to(self.device),
                         obs_history.to(self.device),
-                        commands.to(self.device),
-                        critic_obs_buf.to(self.device),
+                        critic_obs.to(self.device),
                         leg_rewards.to(self.device),
                         arm_rewards.to(self.device),
                         dones.to(self.device),

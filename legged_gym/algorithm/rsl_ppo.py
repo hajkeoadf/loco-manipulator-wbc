@@ -107,8 +107,8 @@ class RSLPPO:
         self.default_arm_d_gains = None
         self.default_arm_dof_pos = None
 
-    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
-        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
+    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, hist_obs_shape, critic_obs_shape, action_shape):
+        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, hist_obs_shape, critic_obs_shape, action_shape, self.device)
 
     def test_mode(self):
         self.actor_critic.test()
@@ -116,14 +116,14 @@ class RSLPPO:
     def train_mode(self):
         self.actor_critic.train()
 
-    def act(self, obs, critic_obs, hist_encoding=False):
+    def act(self, obs, obs_history, critic_obs, hist_encoding=False):
         if self.actor_critic.is_recurrent:
             self._update_actor_critic_obs(obs, critic_obs)
-            actions, actions_log_prob, values, hidden_states = self.actor_critic.act(self.transition.observations, self.transition.critic_observations, hist_encoding, self.transition.hidden_states)
+            actions, actions_log_prob, values, hidden_states = self.actor_critic.act(self.transition.observations, self.transition.observations_history, self.transition.critic_observations, hist_encoding, self.transition.hidden_states)
             self.transition.hidden_states = hidden_states
         else:
-            actions, actions_log_prob, values = self.actor_critic.act(obs, critic_obs, hist_encoding)
-        return actions, actions_log_prob, values
+            actions, actions_log_prob, values, adaptive_gains = self.actor_critic.act(obs, obs_history, critic_obs, hist_encoding)
+        return actions, actions_log_prob, values, adaptive_gains
 
     def process_env_step(self, rewards, arm_rewards, dones, infos):
         self.transition.rewards = torch.cat([rewards, arm_rewards], dim=-1)

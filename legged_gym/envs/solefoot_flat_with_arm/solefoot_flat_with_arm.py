@@ -143,6 +143,8 @@ class BipedSFWithArm(BipedSF):
         # 课程学习相关变量
         self.update_counter = 0
 
+        self.action_delay = self.cfg.env.action_delay
+
     def _prepare_reward_function(self):
         """Prepares reward functions for both legs and arm."""
         super()._prepare_reward_function()
@@ -282,7 +284,7 @@ class BipedSFWithArm(BipedSF):
         # 期望姿态
         self.ee_orn_des = torch.tensor([0, 0.7071068, 0, 0.7071068], device=self.device).repeat((self.num_envs, 1))
 
-        self.obs_history_buf = torch.zeros(self.num_envs, self.cfg.env.history_len, self.cfg.env.num_proprio, device=self.device, dtype=torch.float)
+        self.obs_history_buf = torch.zeros(self.num_envs, self.cfg.env.obs_history_length, self.cfg.env.num_observations, device=self.device, dtype=torch.float)
         self.action_history_buf = torch.zeros(self.num_envs, self.action_delay + 2, self.num_actions, device=self.device, dtype=torch.float)
 
     def _get_init_start_ee_sphere(self):
@@ -386,6 +388,14 @@ class BipedSFWithArm(BipedSF):
         # 组合观察
         obs_buf = torch.cat([obs_buf, arm_obs], dim=-1)
 
+        # 加入priv_obs
+        if self.cfg.env.observe_priv:
+            priv_buf = torch.cat((
+                self.mass_params_tensor,
+                self.friction_coeffs_tensor
+            ), dim=-1)
+            self.obs_buf = torch.cat([obs_buf, priv_buf], dim=-1)
+
         # 加入高度观测（如果有）
         if self.cfg.terrain.measure_heights:
             print(f"self.measured_heights: {self.measured_heights}")    
@@ -399,23 +409,26 @@ class BipedSFWithArm(BipedSF):
             )
             obs_buf = torch.cat((obs_buf, heights), dim=-1)
 
-        # 加入priv_obs
-        if self.cfg.env.observe_priv:
-            priv_buf = torch.cat((
-                self.mass_params_tensor,
-                self.friction_coeffs_tensor
-            ), dim=-1)
-            self.obs_buf = torch.cat([obs_buf, priv_buf, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
+        # # 计算obs_history
+        # self.obs_history_buf = torch.where(
+        #     (self.episode_length_buf <= 1)[:, None, None], 
+        #     torch.stack([obs_buf] * self.cfg.env.obs_history_length, dim=1),
+        #     torch.cat([
+        #         self.obs_history_buf[:, 1:],
+        #         obs_buf.unsqueeze(1)
+        #     ], dim=1)
+        # )   
 
-        # 计算obs_history
+        # 更新历史观测缓冲区
+        curr_hist_obs = obs_buf[:, :self.num_obs]
         self.obs_history_buf = torch.where(
             (self.episode_length_buf <= 1)[:, None, None], 
-            torch.stack([obs_buf] * self.cfg.env.history_len, dim=1),
+            torch.stack([curr_hist_obs] * self.cfg.env.obs_history_length, dim=1),
             torch.cat([
                 self.obs_history_buf[:, 1:],
-                obs_buf.unsqueeze(1)
+                curr_hist_obs.unsqueeze(1)
             ], dim=1)
-        )   
+        )
 
         # 加噪声
         if self.add_noise:
@@ -521,7 +534,7 @@ class BipedSFWithArm(BipedSF):
         self._post_physics_step_callback()
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        self.reset_idx(env_ids)
+        self.reset_idx(env_ids, start=False)
         self.compute_observations()  # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.last_actions[:, :, 1] = self.last_actions[:, :, 0]
@@ -540,22 +553,73 @@ class BipedSFWithArm(BipedSF):
         self.ee_orn = self.rigid_body_state[:, self.ee_idx, 3:7]
         self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
 
-    def reset_idx(self, env_ids):
-        """Reset environments including arm-related states."""
+
+    def reset_idx(self, env_ids, start=False):
+        """Reset some environments.
+            Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
+            [Optional] calls self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids) and
+            Logs episode info
+            Resets some buffers
+
+        Args:
+            env_ids (list[int]): List of environment ids which must be reset
+        """
         if len(env_ids) == 0:
             return
-        
-        super().reset_idx(env_ids)
-        
-        # 重置机械臂相关状态
-        self.arm_rew_buf[env_ids] = 0.
-        self.goal_timer[env_ids] = 0.
+        # update curriculum
+        if self.cfg.terrain.curriculum:
+            self._update_terrain_curriculum(env_ids)
+        # avoid updating command curriculum at each step since the maximum command is common to all envs
+        # if self.cfg.commands.curriculum:
+        #     time_out_env_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
+        #     self.update_command_curriculum(time_out_env_ids)
+        if start:
+            command_env_ids = env_ids
+        else:
+            command_env_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
+        self._resample_commands(command_env_ids)
 
+        # reset robot states
+        self._reset_dofs(env_ids)
+        self._reset_root_states(env_ids)
+        self._check_walk_stability(env_ids)
+        self._resample_commands(command_env_ids)
+        self._resample_ee_goal(env_ids, is_init=True)
+        self._resample_gaits(env_ids)
+
+        # reset buffers
+        self.last_actions[env_ids] = 0.0
+        self.last_dof_pos[env_ids] = self.dof_pos[env_ids]
+        self.last_base_position[env_ids] = self.base_position[env_ids]
+        self.last_foot_positions[env_ids] = self.foot_positions[env_ids]
+        self.last_dof_vel[env_ids] = 0.0
+        self.feet_air_time[env_ids] = 0.0
+        self.episode_length_buf[env_ids] = 0
+        self.envs_steps_buf[env_ids] = 0
+        self.reset_buf[env_ids] = 1
         self.obs_history_buf[env_ids, :, :] = 0.
         self.action_history_buf[env_ids, :, :] = 0.
-        
-        # 重新采样末端执行器目标
-        self._resample_ee_goal(env_ids, is_init=True)
+        self.arm_rew_buf[env_ids] = 0.
+        self.goal_timer[env_ids] = 0.
+        # 先计算高度测量
+        if self.cfg.terrain.measure_heights:
+            self.measured_heights = self._get_heights()
+        # 使用完整的观测（包含高度测量）
+        self.compute_observations()
+        self.obs_history[env_ids] = self.obs_buf[env_ids].repeat(1, self.obs_history_length)
+        self.gait_indices[env_ids] = 0
+        self.fail_buf[env_ids] = 0
+        self.dof_pos_int[env_ids] = 0
+        # fill extras
+        self.extras["episode"] = {}
+        for key in self.episode_sums.keys():
+            self.extras["episode"]["rew_" + key] = (
+                    torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
+            )
+            self.episode_sums[key][env_ids] = 0.0
+        # send timeout info to the algorithm
+        if self.cfg.env.send_timeouts:
+            self.extras["time_outs"] = self.time_out_buf | self.edge_reset_buf
 
     # def step(self, actions):
     #     """Step the environment with both leg and arm actions."""
@@ -604,7 +668,7 @@ class BipedSFWithArm(BipedSF):
             self.arm_rew_buf,
             self.reset_buf,
             self.extras,
-            # self.obs_history,
+            self.obs_history_buf,
             self.critic_obs_buf
         )
 
@@ -649,14 +713,14 @@ class BipedSFWithArm(BipedSF):
 
     def get_observations(self):
         """Get observations for RSL algorithm compatibility."""
-        # 确保观察缓冲区已更新
-        if self.obs_buf is None or self.obs_buf.shape[1] != self.num_obs:
-            self.compute_observations()
+        # # 确保观察缓冲区已更新
+        # if self.obs_buf is None or self.obs_buf.shape[1] != self.num_obs:
+        #     self.compute_observations()
         
         return (
             self.obs_buf,
-            # self.obs_history,
-            self.critic_obs_buf
+            self.critic_obs_buf,
+            self.obs_history_buf
         )
 
     def get_privileged_observations(self):
@@ -752,7 +816,7 @@ class BipedSFWithArm(BipedSF):
 
     def get_num_priv(self):
         """Get number of privileged observations."""
-        return self.num_privileged_obs - self.cfg.env.num_observations
+        return self.num_privileged_obs
 
     def get_num_actor_obs(self):
         """Get number of actor observations."""
