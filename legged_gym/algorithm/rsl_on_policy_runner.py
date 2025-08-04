@@ -59,16 +59,16 @@ class RSLOnPolicyRunner:
         # 创建Actor-Critic网络
         actor_critic_class = eval(self.cfg["policy_class_name"])  # ActorCritic
         actor_critic: ActorCritic = actor_critic_class(
-            num_actor_obs=env.get_num_actor_obs(),
-            num_critic_obs=env.get_num_critic_obs(),
+            num_actor_obs=env.get_num_observations(),
+            num_critic_obs=env.get_num_critic_observations(),
             num_actions=env.get_num_actions_total(),
             actor_hidden_dims=env.get_actor_hidden_dims(),
             critic_hidden_dims=env.get_critic_hidden_dims(),
             priv_encoder_dims=env.get_priv_encoder_dims(),
             activation=env.get_activation(),
             init_std=env.get_init_std(),
-            num_hist=env.get_num_hist(),
-            num_prop=env.get_num_prop(),
+            num_hist=env.get_obs_history_length(),
+            num_prop=env.get_num_proprio_obs(),
             num_leg_actions=env.get_num_leg_actions(),
             num_arm_actions=env.get_num_arm_actions(),
             adaptive_arm_gains=env.get_adaptive_arm_gains(),
@@ -92,7 +92,10 @@ class RSLOnPolicyRunner:
             gamma=self.alg_cfg['gamma'],
             lam=self.alg_cfg['lam'],
             desired_kl=self.alg_cfg['desired_kl'],
-            max_grad_norm=self.alg_cfg['max_grad_norm']
+            max_grad_norm=self.alg_cfg['max_grad_norm'],
+            mixing_schedule=self.alg_cfg['mixing_schedule'],
+            priv_reg_coef_schedual=self.alg_cfg['priv_reg_coef_schedual'],
+            dagger_update_freq=self.alg_cfg['dagger_update_freq']
         )
 
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -136,8 +139,8 @@ class RSLOnPolicyRunner:
         mean_surrogate_loss = 0.
         mean_entropy_loss = 0.
         mean_torque_supervision_loss = 0.
-        value_mixing_ratio = 0.
-        torque_supervision_weight = 0.
+        mean_priv_reg_loss = 0. 
+        mean_hist_latent_loss = 0.
 
         # 初始化writer
         if self.log_dir is not None and self.writer is None:
@@ -163,11 +166,10 @@ class RSLOnPolicyRunner:
             )
 
         # 获取初始观测
-        obs, obs_history, commands, critic_obs = self.env.get_observations()
-        obs, obs_history, commands, critic_obs = (
+        # 此处，事实上obs, critic_obs一模一样
+        obs, critic_obs = self.env.get_observations()
+        obs, critic_obs = (
             obs.to(self.device),
-            obs_history.to(self.device),
-            commands.to(self.device),
             critic_obs.to(self.device),
         )
 
@@ -189,26 +191,19 @@ class RSLOnPolicyRunner:
 
         tot_iter = self.current_learning_iteration + num_learning_iterations
         for it in range(self.current_learning_iteration, tot_iter):
+            self.env.update_command_curriculum()
+
             start = time.time()
-            
+            hist_encoding = it % self.dagger_update_freq == 0
+
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
                     # 获取动作
-                    actions, actions_log_prob, values, adaptive_gains = self.alg.act(obs, critic_obs)
+                    actions, actions_log_prob, values, adaptive_gains = self.alg.act(obs, critic_obs, hist_encoding)
                     
                     # 环境步进
-                    (obs, rewards, dones, infos, obs_history, commands, critic_obs_buf) = self.env.step(actions)
-                    
-                    # 分离腿部和机械臂奖励
-                    if isinstance(rewards, torch.Tensor) and rewards.dim() == 2 and rewards.shape[1] == 2:
-                        # 如果奖励已经是分离的 [leg_reward, arm_reward]
-                        leg_rewards = rewards[:, 0:1]
-                        arm_rewards = rewards[:, 1:2]
-                    else:
-                        # 如果奖励是统一的，需要分离
-                        leg_rewards = rewards * 0.7  # 70%给腿部
-                        arm_rewards = rewards * 0.3  # 30%给机械臂
+                    (obs, leg_rewards, arm_rewards, dones, infos, critic_obs_buf) = self.env.step(actions)
                     
                     obs, obs_history, commands, critic_obs, leg_rewards, arm_rewards, dones = (
                         obs.to(self.device),
@@ -251,13 +246,10 @@ class RSLOnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
 
-            # 更新策略
-            (
-                mean_value_loss,
-                mean_surrogate_loss,
-                mean_entropy_loss,
-                mean_torque_supervision_loss,
-            ) = self.alg.update()
+            if hist_encoding:
+                mean_hist_latent_loss = self.alg.update_dagger()
+            else:
+                mean_value_loss, mean_surrogate_loss, mean_arm_torques_loss, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
             
             # 获取课程学习参数
             value_mixing_ratio = self.alg.get_value_mixing_ratio()
@@ -319,11 +311,15 @@ class RSLOnPolicyRunner:
         self.writer.add_scalar(
             "Loss/torque_supervision", locs["mean_torque_supervision_loss"], locs["it"]
         )
+        self.writer.add_scalar(
+            "Loss/priv_reg_loss", locs["mean_priv_reg_loss"], locs["it"]
+        )
+        self.writer.add_scalar("Loss/mean_hist_latent_loss", locs["mean_hist_latent_loss"], locs["it"])
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         
         # 记录课程学习参数
-        self.writer.add_scalar("Curriculum/value_mixing_ratio", locs["value_mixing_ratio"], locs["it"])
-        self.writer.add_scalar("Curriculum/torque_supervision_weight", locs["torque_supervision_weight"], locs["it"])
+        # self.writer.add_scalar("Curriculum/value_mixing_ratio", locs["value_mixing_ratio"], locs["it"])
+        # self.writer.add_scalar("Curriculum/torque_supervision_weight", locs["torque_supervision_weight"], locs["it"])
         
         # 记录性能指标
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])

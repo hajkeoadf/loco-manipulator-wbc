@@ -96,7 +96,7 @@ class BipedSFWithArm(BipedSF):
         noise_scales = self.cfg.noise.noise_scales
         noise_level = self.cfg.noise.noise_level
         
-        # Base observations (14 DOFs)
+        # Proprio Obs
         noise_vec[0:3] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
         noise_vec[3:6] = noise_scales.gravity * noise_level
         noise_vec[6:20] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos  # 14 DOFs
@@ -104,13 +104,14 @@ class BipedSFWithArm(BipedSF):
         noise_vec[34:39] = 0.0  # commands (5)
         noise_vec[39:53] = 0.0  # actions (14 DOFs)
         noise_vec[53:59] = 0.0  # sin, cos and gaits
-        
-        # Arm observations (no noise for now)
         noise_vec[59:65] = 0.0  # arm goal position and orientation
+
+        # Priv Obs
+        noise_vec[self.num_obs:self.num_obs+self.cfg.env.num_privileged_obs] = 0.0
         
         # Height measurements if enabled
         if self.cfg.terrain.measure_heights:
-            noise_vec[65:] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+            noise_vec[self.num_obs+self.cfg.env.num_privileged_obs:] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
             
         return noise_vec
 
@@ -138,6 +139,9 @@ class BipedSFWithArm(BipedSF):
         self.arm_osc_kd = torch.tensor(self.cfg.arm.osc_kd, device=self.device, dtype=torch.float)
         self.grasp_offset = self.cfg.arm.grasp_offset
         self.init_target_ee_base = torch.tensor(self.cfg.arm.init_target_ee_base, device=self.device).unsqueeze(0)
+        
+        # 课程学习相关变量
+        self.update_counter = 0
 
     def _prepare_reward_function(self):
         """Prepares reward functions for both legs and arm."""
@@ -215,6 +219,50 @@ class BipedSFWithArm(BipedSF):
         # 初始化目标
         self._get_init_start_ee_sphere()
 
+    def _get_curriculum_value(self, schedule, init_range, final_range, counter):
+        """Get curriculum value based on schedule and counter."""
+        return np.clip((counter - schedule[0]) / (schedule[1] - schedule[0]), 0, 1) * (final_range - init_range) + init_range
+    
+    def update_command_curriculum(self):
+        """Update curriculum values for arm commands and rewards."""
+        self.update_counter += 1
+
+        # 更新末端执行器目标范围
+        self.goal_ee_l_ranges = self._get_curriculum_value(
+            self.goal_ee_l_schedule, 
+            self.init_goal_ee_l_ranges, 
+            self.final_goal_ee_l_ranges, 
+            self.update_counter
+        )
+        self.goal_ee_p_ranges = self._get_curriculum_value(
+            self.goal_ee_p_schedule, 
+            self.init_goal_ee_p_ranges, 
+            self.final_goal_ee_p_ranges, 
+            self.update_counter
+        )
+        self.goal_ee_y_ranges = self._get_curriculum_value(
+            self.goal_ee_y_schedule, 
+            self.init_goal_ee_y_ranges, 
+            self.final_goal_ee_y_ranges, 
+            self.update_counter
+        )
+        
+        # 更新跟踪奖励权重
+        if 'tracking_ee_sphere' in self.arm_reward_scales:
+            self.arm_reward_scales['tracking_ee_sphere'] = self._get_curriculum_value(
+                self.tracking_ee_reward_schedule, 
+                0, 
+                self.final_tracking_ee_reward, 
+                self.update_counter
+            )
+        if 'tracking_ee_cart' in self.arm_reward_scales:
+            self.arm_reward_scales['tracking_ee_cart'] = self._get_curriculum_value(
+                self.tracking_ee_reward_schedule, 
+                0, 
+                self.final_tracking_ee_reward, 
+                self.update_counter
+            )
+
     def _init_buffers(self):
         """Initialize buffers including arm-related ones."""
         super()._init_buffers()
@@ -233,6 +281,9 @@ class BipedSFWithArm(BipedSF):
         
         # 期望姿态
         self.ee_orn_des = torch.tensor([0, 0.7071068, 0, 0.7071068], device=self.device).repeat((self.num_envs, 1))
+
+        self.obs_history_buf = torch.zeros(self.num_envs, self.cfg.env.history_len, self.cfg.env.num_proprio, device=self.device, dtype=torch.float)
+        self.action_history_buf = torch.zeros(self.num_envs, self.action_delay + 2, self.num_actions, device=self.device, dtype=torch.float)
 
     def _get_init_start_ee_sphere(self):
         """Initialize starting end-effector position in spherical coordinates."""
@@ -324,7 +375,7 @@ class BipedSFWithArm(BipedSF):
     def compute_observations(self):
         """Compute observations including arm-related ones."""
         # 获取基础观察
-        obs_buf, critic_obs_buf = super().compute_self_observations()
+        obs_buf, _ = super().compute_self_observations()
 
         # 添加机械臂相关观察
         arm_obs = torch.cat([
@@ -334,7 +385,6 @@ class BipedSFWithArm(BipedSF):
 
         # 组合观察
         obs_buf = torch.cat([obs_buf, arm_obs], dim=-1)
-        print(f"obs_buf shape: {obs_buf.shape}")
 
         # 加入高度观测（如果有）
         if self.cfg.terrain.measure_heights:
@@ -348,7 +398,24 @@ class BipedSFWithArm(BipedSF):
                 * self.obs_scales.height_measurements
             )
             obs_buf = torch.cat((obs_buf, heights), dim=-1)
-        print(f"obs_buf shape: {obs_buf.shape}")
+
+        # 加入priv_obs
+        if self.cfg.env.observe_priv:
+            priv_buf = torch.cat((
+                self.mass_params_tensor,
+                self.friction_coeffs_tensor
+            ), dim=-1)
+            self.obs_buf = torch.cat([obs_buf, priv_buf, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
+
+        # 计算obs_history
+        self.obs_history_buf = torch.where(
+            (self.episode_length_buf <= 1)[:, None, None], 
+            torch.stack([obs_buf] * self.cfg.env.history_len, dim=1),
+            torch.cat([
+                self.obs_history_buf[:, 1:],
+                obs_buf.unsqueeze(1)
+            ], dim=1)
+        )   
 
         # 加噪声
         if self.add_noise:
@@ -357,17 +424,17 @@ class BipedSFWithArm(BipedSF):
             obs_buf = obs_buf + noise
 
         self.obs_buf = obs_buf
-        self.critic_obs_buf = critic_obs_buf  # 如果有需要的话
+        self.critic_obs_buf = obs_buf  
 
-        # 历史观测
-        self.obs_history = torch.cat(
-            (self.obs_history[:, self.num_obs:], self.obs_buf), dim=-1
-        )
+        # # 历史观测
+        # self.obs_history = torch.cat(
+        #     (self.obs_history[:, self.num_obs:], self.obs_buf), dim=-1
+        # )
 
         return self.obs_buf
 
     def compute_reward(self):
-        """Compute rewards for both legs and arm."""
+        """Compute rewards for the arm."""
         # 计算腿部奖励
         super().compute_reward()
         
@@ -381,8 +448,12 @@ class BipedSFWithArm(BipedSF):
             
         if self.cfg.rewards.only_positive_rewards:
             self.arm_rew_buf[:] = torch.clip(self.arm_rew_buf[:], min=0.)
-            
-        self.arm_rew_buf /= 100
+        
+        # add termination reward after clipping
+        if "termination" in self.arm_reward_scales:
+            rew = self._reward_termination() * self.arm_reward_scales["termination"]
+            self.arm_rew_buf += rew
+            self.episode_sums["termination"] += rew
 
     def _reward_tracking_ee_sphere(self):
         """Reward for tracking end-effector position in spherical coordinates."""
@@ -409,8 +480,57 @@ class BipedSFWithArm(BipedSF):
         return torch.sum(torch.abs(self.torques[:, 14:] * self.dof_vel[:, 14:]), dim=1)
 
     def post_physics_step(self):
-        """Post physics step processing including arm updates."""
-        super().post_physics_step()
+        """check terminations, compute observations and rewards
+        calls self._post_physics_step_callback() for common computations
+        calls self._draw_debug_vis() if needed
+        """
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+
+        self.episode_length_buf += 1
+
+        # prepare quantities
+        self.base_quat[:] = self.root_states[:, 3:7]
+        self.base_position = self.root_states[:, :3]
+        self.base_lin_vel = (self.base_position - self.last_base_position) / self.dt
+        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.base_lin_vel)
+
+        self.base_lin_acc = (self.base_lin_vel - self.last_base_lin_vel) / self.dt
+        self.base_lin_acc[:] = quat_rotate_inverse(self.base_quat, self.base_lin_acc)
+
+        self.base_ang_vel[:] = quat_rotate_inverse(
+            self.base_quat, self.root_states[:, 10:13]
+        )
+        self.projected_gravity[:] = quat_rotate_inverse(
+            self.base_quat, self.gravity_vec
+        )
+        self.dof_acc = (self.last_dof_vel - self.dof_vel) / self.dt
+        self.dof_pos_int += (self.dof_pos - self.raw_default_dof_pos) * self.dt
+        self.power = torch.abs(self.torques * self.dof_vel)
+
+        # self.dof_jerk = (self.last_dof_acc - self.dof_acc) / self.dt
+
+        self.compute_foot_state()
+
+        # compute observations, rewards, resets, ...
+        self.check_termination()
+        self.compute_observations()
+        self.compute_reward()
+
+        self._post_physics_step_callback()
+
+        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self.reset_idx(env_ids)
+        self.compute_observations()  # in some cases a simulation step might be required to refresh some obs (for example body positions)
+
+        self.last_actions[:, :, 1] = self.last_actions[:, :, 0]
+        self.last_actions[:, :, 0] = self.actions[:]
+        self.last_dof_vel[:] = self.dof_vel[:]
+        self.last_root_vel[:] = self.root_states[:, 7:13]
+        # self.last_dof_acc[:] = self.dof_acc[:]
+        self.last_base_position[:] = self.base_position[:]
+        self.last_foot_positions[:] = self.foot_positions[:]
         
         # 更新末端执行器目标
         self.update_curr_ee_goal()
@@ -422,28 +542,71 @@ class BipedSFWithArm(BipedSF):
 
     def reset_idx(self, env_ids):
         """Reset environments including arm-related states."""
+        if len(env_ids) == 0:
+            return
+        
         super().reset_idx(env_ids)
         
         # 重置机械臂相关状态
         self.arm_rew_buf[env_ids] = 0.
         self.goal_timer[env_ids] = 0.
+
+        self.obs_history_buf[env_ids, :, :] = 0.
+        self.action_history_buf[env_ids, :, :] = 0.
         
         # 重新采样末端执行器目标
         self._resample_ee_goal(env_ids, is_init=True)
 
+    # def step(self, actions):
+    #     """Step the environment with both leg and arm actions."""
+    #     # 确保动作维度正确
+    #     if actions.shape[-1] != self.num_actions:
+    #         raise ValueError(f"Expected {self.num_actions} actions, got {actions.shape[-1]}")
+        
+    #     # 调用父类的step方法
+    #     obs_buf, rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf = super().step(actions)
+        
+    #     # 重新计算观测，确保包含arm相关信息
+    #     self.compute_observations()
+        
+    #     # 添加机械臂奖励到总奖励中
+    #     self.compute_arm_reward()
+        
+    #     # 返回正确的obs_buf（包含arm信息）
+    #     return self.obs_buf, rew_buf, self.arm_rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf
+
     def step(self, actions):
-        """Step the environment with both leg and arm actions."""
-        # 确保动作维度正确
-        if actions.shape[-1] != self.num_actions:
-            raise ValueError(f"Expected {self.num_actions} actions, got {actions.shape[-1]}")
-        
-        # 调用父类的step方法
-        obs_buf, rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf = super().step(actions)
-        
-        # 添加机械臂奖励到总奖励中
-        rew_buf += self.arm_rew_buf
-        
-        return obs_buf, rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf
+        self._action_clip(actions)
+        # step physics and render each frame
+        self.render()
+        self.pre_physics_step()
+        for _ in range(self.cfg.control.decimation):
+            self.envs_steps_buf += 1
+            self.torques = self._compute_torques(self.actions).view(self.torques.shape)
+            self.gym.set_dof_actuation_force_tensor(
+                self.sim, gymtorch.unwrap_tensor(self.torques)
+            )
+            if self.cfg.domain_rand.push_robots:
+                self._push_robots()
+            self.gym.simulate(self.sim)
+            if self.device == "cpu":
+                self.gym.fetch_results(self.sim, True)
+            self.gym.refresh_dof_state_tensor(self.sim)
+            self.compute_dof_vel()
+        self.post_physics_step()
+
+        # return clipped obs, clipped states (None), rewards, dones and infos
+        clip_obs = self.cfg.normalization.clip_observations
+        self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        return (
+            self.obs_buf,
+            self.rew_buf,
+            self.arm_rew_buf,
+            self.reset_buf,
+            self.extras,
+            # self.obs_history,
+            self.critic_obs_buf
+        )
 
     def _draw_debug_vis(self):
         """Draw debug visualizations for arm."""
@@ -492,8 +655,7 @@ class BipedSFWithArm(BipedSF):
         
         return (
             self.obs_buf,
-            self.obs_history,
-            self.commands[:, :5] * self.commands_scale,  # 5维命令输出
+            # self.obs_history,
             self.critic_obs_buf
         )
 
@@ -682,4 +844,9 @@ class BipedSFWithArm(BipedSF):
 
     def get_adaptive_arm_gains_scale_config(self):
         """Get adaptive arm gains scale from config."""
-        return 0.1  # 默认值，可以在配置中设置
+        return self.cfg.control.adaptive_arm_gains_scale
+
+    def update_curriculum(self):
+        """Public method to update curriculum learning."""
+        if self.cfg.commands.curriculum:
+            self.update_command_curriculum()

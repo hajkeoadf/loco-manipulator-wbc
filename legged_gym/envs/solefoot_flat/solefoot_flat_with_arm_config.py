@@ -31,17 +31,17 @@
 from legged_gym.envs.solefoot_flat.solefoot_flat_config import BipedCfgSF, BipedCfgPPOSF
 from legged_gym.envs.base.base_config import BaseConfig
 
+RESUME = True
+
 class BipedCfgSFWithArm(BipedCfgSF):
     class env:
         num_envs = 4096
         num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
         num_critic_observations = 3 + num_observations
         num_height_samples = 187
-        num_privileged_obs = (
-            num_observations + 3 + 12 + num_height_samples + 6 + 20 + 6
-        )
+        num_privileged_obs = 4
         num_actions = 14  # 8 (legs) + 6 (arm)
-        ee_idx = 10
+        ee_idx = 10 # !!!!要确认
         env_spacing = 3.0
         send_timeouts = True
         episode_length_s = 20
@@ -49,32 +49,33 @@ class BipedCfgSFWithArm(BipedCfgSF):
         dof_vel_use_pos_diff = True
         fail_to_terminal_time_s = 0.5
         action_delay = 0  # 动作延迟
+        observe_priv = True  # 是否使用privileged observations
 
         # privileged obs flags
-        priv_observe_friction = True
-        priv_observe_friction_indep = True
-        priv_observe_ground_friction = False
-        priv_observe_ground_friction_per_foot = False
-        priv_observe_restitution = True
-        priv_observe_base_mass = True
-        priv_observe_com_displacement = True
-        priv_observe_motor_strength = False
-        priv_observe_motor_offset = False
-        priv_observe_joint_friction = True
-        priv_observe_Kp_factor = True
-        priv_observe_Kd_factor = True
-        priv_observe_contact_forces = False
-        priv_observe_contact_states = False
-        priv_observe_body_velocity = False
-        priv_observe_foot_height = False
-        priv_observe_body_height = False
-        priv_observe_gravity = False
-        priv_observe_terrain_type = False
-        priv_observe_clock_inputs = False
-        priv_observe_doubletime_clock_inputs = False
-        priv_observe_halftime_clock_inputs = False
-        priv_observe_desired_contact_states = False
-        priv_observe_dummy_variable = False
+        # priv_observe_friction = True
+        # priv_observe_friction_indep = True
+        # priv_observe_ground_friction = False
+        # priv_observe_ground_friction_per_foot = False
+        # priv_observe_restitution = True
+        # priv_observe_base_mass = True
+        # priv_observe_com_displacement = True
+        # priv_observe_motor_strength = False
+        # priv_observe_motor_offset = False
+        # priv_observe_joint_friction = True
+        # priv_observe_Kp_factor = True
+        # priv_observe_Kd_factor = True
+        # priv_observe_contact_forces = False
+        # priv_observe_contact_states = False
+        # priv_observe_body_velocity = False
+        # priv_observe_foot_height = False
+        # priv_observe_body_height = False
+        # priv_observe_gravity = False
+        # priv_observe_terrain_type = False
+        # priv_observe_clock_inputs = False
+        # priv_observe_doubletime_clock_inputs = False
+        # priv_observe_halftime_clock_inputs = False
+        # priv_observe_desired_contact_states = False
+        # priv_observe_dummy_variable = False
 
     class goal_ee:
         command_mode = 'cart'  # 'cart' or 'sphere'
@@ -87,6 +88,12 @@ class BipedCfgSFWithArm(BipedCfgSF):
         sphere_error_scale = [1.0, 1.0, 1.0]  # 球坐标系误差缩放
         orn_error_scale = [1.0, 1.0, 1.0]  # 姿态误差缩放
         
+        # 课程学习调度参数
+        l_schedule = [0, 1]  # 长度课程学习
+        p_schedule = [0, 1]  # 俯仰课程学习
+        y_schedule = [0, 1]  # 偏航课程学习
+        tracking_ee_reward_schedule = [0, 1]  # 跟踪奖励课程学习
+        
         class ranges:
             init_pos_l = [0.1, 0.3]  # 初始长度范围
             init_pos_p = [-0.2, 0.2]  # 初始俯仰范围
@@ -96,11 +103,12 @@ class BipedCfgSFWithArm(BipedCfgSF):
             final_pos_y = [-0.3, 0.3]  # 最终偏航范围
             final_delta_orn = [[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.1]]  # 最终姿态变化范围
             final_tracking_ee_reward = 1.0  # 最终跟踪奖励
-        
-        l_schedule = [0, 1000]  # 长度课程学习
-        p_schedule = [0, 1000]  # 俯仰课程学习
-        y_schedule = [0, 1000]  # 偏航课程学习
-        tracking_ee_reward_schedule = [0, 1000]  # 跟踪奖励课程学习
+
+    class commands:
+        curriculum = True  # 启用命令课程学习
+        num_commands = 3
+        resampling_time = 3.0  # 命令重新采样时间[s]
+        curriculum_threshold = 0.75  # 课程学习阈值
 
     class arm:
         osc_kp = [100.0, 100.0, 100.0, 50.0, 50.0, 50.0]  # 操作空间控制Kp
@@ -136,6 +144,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
         action_scale = 0.25
         control_type = "P"
         adaptive_arm_gains = False  # 是否使用自适应机械臂增益
+        adaptive_arm_gains_scale = 10.0  # 自适应机械臂增益缩放
         torque_supervision = False  # 是否使用力矩监督
         
         stiffness = {
@@ -370,6 +379,11 @@ class BipedCfgPPOSFWithArm(BipedCfgPPOSF):
         est_learning_rate = 1.0e-3
         ts_learning_rate = 1.0e-4
         critic_take_latent = True
+
+        mixing_schedule=[1.0, 0, 3000] if not RESUME else [1.0, 0, 1]
+
+        dagger_update_freq = 20
+        priv_reg_coef_schedual = [0, 0.1, 3000, 7000] if not RESUME else [0, 1, 1000, 1000]
 
     class runner:
         encoder_class_name = "MLP_Encoder"

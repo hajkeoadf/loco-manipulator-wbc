@@ -329,6 +329,10 @@ class BipedSF(BaseTask):
         self.base_com = torch.zeros(
             self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False
         )
+        # 初始化mass_params_tensor - 包含base_mass(1)和base_com(3)
+        self.mass_params_tensor = torch.zeros(
+            self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False
+        )
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(
@@ -354,7 +358,8 @@ class BipedSF(BaseTask):
             body_props = self.gym.get_actor_rigid_body_properties(
                 env_handle, actor_handle
             )
-            body_props = self._process_rigid_body_props(body_props, i)
+            body_props, mass_params = self._process_rigid_body_props(body_props, i)
+            self.mass_params_tensor[i] = torch.from_numpy(mass_params).to(self.device)
             self.gym.set_actor_rigid_body_properties(
                 env_handle, actor_handle, body_props, recomputeInertia=True
             )
@@ -367,6 +372,8 @@ class BipedSF(BaseTask):
         self.contact_indices = torch.zeros(
             len(contact_names), dtype=torch.long, device=self.device, requires_grad=False
         )
+        self.friction_coeffs_tensor = self.friction_coeffs.to(self.device).squeeze(-1)
+        
         for i in range(len(feet_names)):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(
                 self.envs[0], self.actor_handles[0], feet_names[i]
@@ -524,8 +531,6 @@ class BipedSF(BaseTask):
         )
 
     def compute_self_observations(self):
-        """简化观测结构，参考airbot的实现"""
-        # 参考airbot的观测结构
         obs_buf = torch.cat((
             self.base_ang_vel * self.obs_scales.ang_vel, # base_ang_vel 是base的角速度, 3维
             self.projected_gravity, # 映射的重力, 3维

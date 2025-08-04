@@ -119,7 +119,7 @@ class RSLPPO:
     def act(self, obs, critic_obs, hist_encoding=False):
         if self.actor_critic.is_recurrent:
             self._update_actor_critic_obs(obs, critic_obs)
-            actions, actions_log_prob, values, hidden_states = self.actor_critic.act(self.transition.observations, self.transition.critic_observations, self.transition.hidden_states, hist_encoding)
+            actions, actions_log_prob, values, hidden_states = self.actor_critic.act(self.transition.observations, self.transition.critic_observations, hist_encoding, self.transition.hidden_states)
             self.transition.hidden_states = hidden_states
         else:
             actions, actions_log_prob, values = self.actor_critic.act(obs, critic_obs, hist_encoding)
@@ -153,17 +153,27 @@ class RSLPPO:
         mean_entropy_loss = 0
         mean_priv_reg_loss = 0
         mean_torque_supervision_loss = 0
+        value_mixing_ratio = self.get_value_mixing_ratio()
         
         generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
             old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, target_arm_torques_batch, current_arm_dof_pos_batch, current_arm_dof_vel_batch in generator:
 
-            self.actor_critic.act(obs_batch, critic_obs_batch, hid_states_batch, masks_batch)
+            self.actor_critic.act(obs_batch, critic_obs_batch, False, hid_states_batch, masks_batch)
             actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
             value_batch = self.actor_critic.evaluate(critic_obs_batch, hid_states_batch, masks_batch)
             mu_batch = self.actor_critic.action_mean
             sigma_batch = self.actor_critic.action_std
             entropy_batch = self.actor_critic.entropy
+
+            # Adaptation module update
+            priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
+            with torch.inference_mode():
+                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
+            priv_reg_loss = (priv_latent_batch - hist_latent_batch.detach()).norm(p=2, dim=1).mean()
+            priv_reg_stage = min(max((self.counter - self.priv_reg_coef_schedual[2]), 0) / self.priv_reg_coef_schedual[3], 1)
+            priv_reg_coef = priv_reg_stage * (self.priv_reg_coef_schedual[1] - self.priv_reg_coef_schedual[0]) + self.priv_reg_coef_schedual[0]
+            # priv_reg_loss = torch.zeros(1, device=self.device)
 
             # KL
             if self.desired_kl is not None and self.schedule == 'adaptive':
@@ -182,9 +192,12 @@ class RSLPPO:
                     param_group['lr'] = self.learning_rate
 
             # Surrogate loss
+            mixing_advantages_batch = torch.zeros_like(advantages_batch)
+            mixing_advantages_batch[..., 0] = advantages_batch[..., 0] + value_mixing_ratio * advantages_batch[..., 1]
+            mixing_advantages_batch[..., 1] = advantages_batch[..., 1] + value_mixing_ratio * advantages_batch[..., 0]
             ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
-            surrogate = -torch.squeeze(advantages_batch) * ratio
-            surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(ratio, 1.0 - self.clip_param,
+            surrogate = -torch.squeeze(mixing_advantages_batch) * ratio
+            surrogate_clipped = -torch.squeeze(mixing_advantages_batch) * torch.clamp(ratio, 1.0 - self.clip_param,
                                                                               1.0 + self.clip_param)
             surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
@@ -212,7 +225,11 @@ class RSLPPO:
             entropy_loss = -entropy_batch.mean()
 
             # Total loss
-            loss = surrogate_loss + self.value_loss_coef * value_loss + self.entropy_coef * entropy_loss + torque_supervision_loss
+            loss = surrogate_loss \
+                + self.value_loss_coef * value_loss \
+                + self.entropy_coef * entropy_loss \
+                + torque_supervision_loss \
+                + priv_reg_coef * priv_reg_loss
 
             # Gradient step
             self.optimizer.zero_grad()
@@ -220,31 +237,55 @@ class RSLPPO:
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
-            # Update history encoder if needed
-            if hasattr(self.actor_critic.actor, 'history_encoder'):
-                self.hist_encoder_optimizer.zero_grad()
-                # Add history encoding loss here if needed
-                self.hist_encoder_optimizer.step()
-
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy_loss += entropy_loss.item()
             mean_torque_supervision_loss += torque_supervision_loss.item()
+            mean_priv_reg_loss += priv_reg_loss.item()
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         mean_entropy_loss /= num_updates
         mean_torque_supervision_loss /= num_updates
+        mean_priv_reg_loss /= num_updates
 
         self.storage.clear()
+        self.update_counter()
 
-        return mean_value_loss, mean_surrogate_loss, mean_entropy_loss, mean_torque_supervision_loss
+        return mean_value_loss, mean_surrogate_loss, mean_entropy_loss, mean_torque_supervision_loss, mean_priv_reg_loss, priv_reg_coef
 
     def update_dagger(self):
         """DAgger update for imitation learning"""
         # Implementation for DAgger algorithm
-        pass
+        mean_hist_latent_loss = 0
+        if self.actor_critic.is_recurrent:
+            generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        else:
+            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
+            old_mu_batch, old_sigma_batch, target_arm_torques, current_arm_dof_pos, current_arm_dof_vel, hid_states_batch, masks_batch in generator:
+                with torch.inference_mode():
+                    self.actor_critic.act(obs_batch, critic_obs_batch, hist_encoding=True, masks=masks_batch, hidden_states=hid_states_batch[0])
+
+                # Adaptation module update
+                with torch.inference_mode():
+                    priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
+                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
+                hist_latent_loss = (priv_latent_batch.detach() - hist_latent_batch).norm(p=2, dim=1).mean()
+                self.hist_encoder_optimizer.zero_grad()
+                hist_latent_loss.backward()
+                nn.utils.clip_grad_norm_(self.actor_critic.actor.history_encoder.parameters(), self.max_grad_norm)
+                self.hist_encoder_optimizer.step()
+                
+                mean_hist_latent_loss += hist_latent_loss.item()
+        num_updates = self.num_learning_epochs * self.num_mini_batches
+        mean_hist_latent_loss /= num_updates
+
+        self.storage.clear()
+        self.update_counter()
+
+        return mean_hist_latent_loss
 
     def enforce_min_std(self):
         """Enforce minimum policy standard deviation"""
@@ -257,12 +298,7 @@ class RSLPPO:
 
     def get_value_mixing_ratio(self):
         """Get value mixing ratio for curriculum learning"""
-        if self.counter < self.mixing_schedule[1]:
-            return self.mixing_schedule[0]
-        elif self.counter < self.mixing_schedule[2]:
-            return self.mixing_schedule[0] + (1.0 - self.mixing_schedule[0]) * (self.counter - self.mixing_schedule[1]) / (self.mixing_schedule[2] - self.mixing_schedule[1])
-        else:
-            return 1.0
+        return min(max((self.counter - self.mixing_schedule[1]) / self.mixing_schedule[2], 0), 1) * self.mixing_schedule[0]
 
     def get_torque_supervision_weight(self):
         """Get torque supervision weight for curriculum learning"""

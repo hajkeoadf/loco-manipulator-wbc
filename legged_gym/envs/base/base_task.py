@@ -363,6 +363,7 @@ class BaseTask:
         self.whole_body_mass = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
         )
+
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(
@@ -388,7 +389,9 @@ class BaseTask:
             body_props = self.gym.get_actor_rigid_body_properties(
                 env_handle, actor_handle
             )
-            body_props = self._process_rigid_body_props(body_props, i)
+            body_props, mass_params = self._process_rigid_body_props(body_props, i)
+            # 存储mass_params到tensor中
+            self.mass_params_tensor[i] = torch.from_numpy(mass_params).to(self.device)
             self.gym.set_actor_rigid_body_properties(
                 env_handle, actor_handle, body_props, recomputeInertia=True
             )
@@ -556,8 +559,11 @@ class BaseTask:
                     * (max_add_mass - min_add_mass) + min_add_mass)
                 self.base_mass = props[0].mass + self.base_add_mass
             props[0].mass += self.base_add_mass[env_id]
+            rand_mass = self.base_add_mass[env_id].cpu().numpy()
         else:
             self.base_mass[:] = props[0].mass
+            rand_mass = np.zeros(1)
+            
         if self.cfg.domain_rand.randomize_base_com:
             if env_id == 0:
                 com_x, com_y, com_z = self.cfg.domain_rand.rand_com_vec
@@ -573,6 +579,10 @@ class BaseTask:
             props[0].com.x += self.base_com[env_id, 0]
             props[0].com.y += self.base_com[env_id, 1]
             props[0].com.z += self.base_com[env_id, 2]
+            rand_com = self.base_com[env_id].cpu().numpy()
+        else:
+            rand_com = np.zeros(3)
+            
         if self.cfg.domain_rand.randomize_inertia:
             for i in range(len(props)):
                 low_bound, high_bound = self.cfg.domain_rand.randomize_inertia_range
@@ -581,7 +591,10 @@ class BaseTask:
                 props[i].inertia.x.x *= inertia_scale
                 props[i].inertia.y.y *= inertia_scale
                 props[i].inertia.z.z *= inertia_scale
-        return props
+                
+        # 效仿widowGo1的实现，返回mass_params
+        mass_params = np.concatenate([rand_mass, rand_com])
+        return props, mass_params
 
     def _step_contact_targets(self):
         frequencies = self.gaits[:, 0]
@@ -966,27 +979,27 @@ class BaseTask:
         self.env_origins[env_ids] = self.terrain_origins[
             self.terrain_levels[env_ids], self.terrain_types[env_ids]
         ]
-        if self.cfg.commands.curriculum:
-            self.command_ranges["lin_vel_x"][self.fail_ids, 0] = torch.clip(
-                self.command_ranges["lin_vel_x"][self.fail_ids, 0] + 0.25,
-                -self.cfg.commands.smooth_max_lin_vel_x,
-                -1,
-            )
-            self.command_ranges["lin_vel_x"][self.fail_ids, 1] = torch.clip(
-                self.command_ranges["lin_vel_x"][self.fail_ids, 1] - 0.25,
-                1,
-                self.cfg.commands.smooth_max_lin_vel_x,
-            )
-            self.command_ranges["lin_vel_y"][self.fail_ids, 0] = torch.clip(
-                self.command_ranges["lin_vel_y"][self.fail_ids, 0] + 0.25,
-                -self.cfg.commands.smooth_max_lin_vel_y,
-                -1,
-            )
-            self.command_ranges["lin_vel_y"][self.fail_ids, 1] = torch.clip(
-                self.command_ranges["lin_vel_y"][self.fail_ids, 1] - 0.25,
-                1,
-                self.cfg.commands.smooth_max_lin_vel_y,
-            )
+        # if self.cfg.commands.curriculum:
+        #     self.command_ranges["lin_vel_x"][self.fail_ids, 0] = torch.clip(
+        #         self.command_ranges["lin_vel_x"][self.fail_ids, 0] + 0.25,
+        #         -self.cfg.commands.smooth_max_lin_vel_x,
+        #         -1,
+        #     )
+        #     self.command_ranges["lin_vel_x"][self.fail_ids, 1] = torch.clip(
+        #         self.command_ranges["lin_vel_x"][self.fail_ids, 1] - 0.25,
+        #         1,
+        #         self.cfg.commands.smooth_max_lin_vel_x,
+        #     )
+        #     self.command_ranges["lin_vel_y"][self.fail_ids, 0] = torch.clip(
+        #         self.command_ranges["lin_vel_y"][self.fail_ids, 0] + 0.25,
+        #         -self.cfg.commands.smooth_max_lin_vel_y,
+        #         -1,
+        #     )
+        #     self.command_ranges["lin_vel_y"][self.fail_ids, 1] = torch.clip(
+        #         self.command_ranges["lin_vel_y"][self.fail_ids, 1] - 0.25,
+        #         1,
+        #         self.cfg.commands.smooth_max_lin_vel_y,
+        #     )
             
     def _push_robots(self):
         """Random pushes the robots."""
