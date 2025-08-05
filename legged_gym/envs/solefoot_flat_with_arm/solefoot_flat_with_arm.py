@@ -394,7 +394,7 @@ class BipedSFWithArm(BipedSF):
                 self.mass_params_tensor,
                 self.friction_coeffs_tensor
             ), dim=-1)
-            self.obs_buf = torch.cat([obs_buf, priv_buf], dim=-1)
+            obs_buf = torch.cat([obs_buf, priv_buf], dim=-1)
 
         # 加入高度观测（如果有）
         if self.cfg.terrain.measure_heights:
@@ -408,6 +408,15 @@ class BipedSFWithArm(BipedSF):
                 * self.obs_scales.height_measurements
             )
             obs_buf = torch.cat((obs_buf, heights), dim=-1)
+
+        # 加噪声
+        if self.add_noise:
+            noise_scale_vec = self._get_noise_scale_vec(self.cfg)
+            noise = (2 * torch.rand_like(obs_buf) - 1) * noise_scale_vec
+            obs_buf = obs_buf + noise
+
+        self.obs_buf = obs_buf
+        self.critic_obs_buf = obs_buf  
 
         # # 计算obs_history
         # self.obs_history_buf = torch.where(
@@ -429,20 +438,6 @@ class BipedSFWithArm(BipedSF):
                 curr_hist_obs.unsqueeze(1)
             ], dim=1)
         )
-
-        # 加噪声
-        if self.add_noise:
-            noise_scale_vec = self._get_noise_scale_vec(self.cfg)
-            noise = (2 * torch.rand_like(obs_buf) - 1) * noise_scale_vec
-            obs_buf = obs_buf + noise
-
-        self.obs_buf = obs_buf
-        self.critic_obs_buf = obs_buf  
-
-        # # 历史观测
-        # self.obs_history = torch.cat(
-        #     (self.obs_history[:, self.num_obs:], self.obs_buf), dim=-1
-        # )
 
         return self.obs_buf
 

@@ -106,7 +106,7 @@ class ActorCritic(nn.Module):
         activation = get_activation(activation)
 
         # History encoder
-        self.history_encoder = StateHistoryEncoder(activation, self.num_prop, self.num_hist, 64)
+        self.history_encoder = StateHistoryEncoder(activation, self.num_prop, self.num_hist, priv_encoder_dims[1])
 
         # Privileged information encoder
         # !!!!要改
@@ -185,10 +185,8 @@ class ActorCritic(nn.Module):
                     latent = self.infer_hist_latent(obs_history)
                 else:
                     latent = self.infer_priv_latent(obs)
-                print(f"latent shape: {latent.shape}")
                 
                 shared_input = torch.cat([shared_input, latent], dim=-1)
-                print(f"shared_input shape: {shared_input.shape}")
                 shared_features = self.shared(shared_input)
                 
                 # Generate actions
@@ -205,21 +203,7 @@ class ActorCritic(nn.Module):
                 return actions, adaptive_gains
 
             def infer_priv_latent(self, obs):
-                """
-                从观察数据中提取特权信息并编码
-                观察数据结构: [基础观察(57) + 机械臂观察(6) + 高度观测(187,可选) + 特权观察(4)]
-                """
-                # 计算各部分的位置
-                height_obs_dim = 187 if obs.shape[-1] > self.num_prop + self.num_priv + self.num_hist * self.num_prop else 0  # 高度观测维度
-                
-                # 特权观察位置：在高度观测之后，历史观察之前
-                priv_start = self.num_prop + height_obs_dim
-                priv_end = priv_start + self.num_priv
-                
-                # 提取特权观察
-                priv_obs = obs[:, priv_start:priv_end]
-                
-                # 编码特权信息
+                priv_obs = obs[:, self.num_prop:self.num_prop+self.num_priv]
                 return self.priv_encoder(priv_obs)
 
             def infer_hist_latent(self, obs_history):
@@ -272,7 +256,6 @@ class ActorCritic(nn.Module):
                 self.arm_value_head = nn.Sequential(*arm_layers)
 
             def forward(self, obs):
-                # !!!!目前的写法假设不加入高度测量
                 shared_features = self.shared(obs[:, :self.num_prop+self.num_priv])
                 
                 # Separate value estimates
@@ -285,8 +268,8 @@ class ActorCritic(nn.Module):
                 return values
 
         # Initialize actor and critic
-        mlp_input_dim_a = self.num_prop + 64  # obs + hist + priv
-        mlp_input_dim_c = self.num_prop + self.num_priv  # obs + hist + priv
+        mlp_input_dim_a = self.num_prop + priv_encoder_dims[1]  # obs + latent
+        mlp_input_dim_c = self.num_prop + self.num_priv  # obs + priv
         
         self.actor = Actor(mlp_input_dim_a, actor_hidden_dims, activation,
                           [128, 64], [128, 64], 8, 6,  # leg and arm action dimensions

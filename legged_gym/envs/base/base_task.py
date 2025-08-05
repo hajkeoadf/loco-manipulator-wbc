@@ -90,7 +90,7 @@ class BaseTask:
             self.num_envs, self.num_obs+self.num_priv, device=self.device, dtype=torch.float
         )
         self.critic_obs_buf = torch.zeros(
-            self.num_envs, self.num_critic_obs+self.num_priv, device=self.device, dtype=torch.float
+            self.num_envs, self.num_obs+self.num_priv, device=self.device, dtype=torch.float
         )
         self.obs_history_buf = torch.zeros(
             self.num_envs,

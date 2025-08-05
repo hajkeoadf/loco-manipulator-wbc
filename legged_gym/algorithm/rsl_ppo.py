@@ -156,10 +156,10 @@ class RSLPPO:
         value_mixing_ratio = self.get_value_mixing_ratio()
         
         generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
+        for obs_batch, obs_history_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
             old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, target_arm_torques_batch, current_arm_dof_pos_batch, current_arm_dof_vel_batch in generator:
 
-            self.actor_critic.act(obs_batch, critic_obs_batch, False, hid_states_batch, masks_batch)
+            self.actor_critic.act(obs_batch, obs_history_batch, critic_obs_batch, False, hid_states_batch, masks_batch)
             actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
             value_batch = self.actor_critic.evaluate(critic_obs_batch, hid_states_batch, masks_batch)
             mu_batch = self.actor_critic.action_mean
@@ -169,10 +169,10 @@ class RSLPPO:
             # Adaptation module update
             priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
             with torch.inference_mode():
-                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
+                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_history_batch)
             priv_reg_loss = (priv_latent_batch - hist_latent_batch.detach()).norm(p=2, dim=1).mean()
-            priv_reg_stage = min(max((self.counter - self.priv_reg_coef_schedual[2]), 0) / self.priv_reg_coef_schedual[3], 1)
-            priv_reg_coef = priv_reg_stage * (self.priv_reg_coef_schedual[1] - self.priv_reg_coef_schedual[0]) + self.priv_reg_coef_schedual[0]
+            priv_reg_stage = min(max((self.counter - self.priv_reg_coef_schedule[2]), 0) / self.priv_reg_coef_schedule[3], 1)
+            priv_reg_coef = priv_reg_stage * (self.priv_reg_coef_schedule[1] - self.priv_reg_coef_schedule[0]) + self.priv_reg_coef_schedule[0]
             # priv_reg_loss = torch.zeros(1, device=self.device)
 
             # KL
@@ -263,15 +263,15 @@ class RSLPPO:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
+        for obs_batch, obs_history_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
             old_mu_batch, old_sigma_batch, target_arm_torques, current_arm_dof_pos, current_arm_dof_vel, hid_states_batch, masks_batch in generator:
                 with torch.inference_mode():
-                    self.actor_critic.act(obs_batch, critic_obs_batch, hist_encoding=True, masks=masks_batch, hidden_states=hid_states_batch[0])
+                    self.actor_critic.act(obs_batch, obs_history_batch, critic_obs_batch, hist_encoding=True, masks=masks_batch, hidden_states=hid_states_batch[0])
 
                 # Adaptation module update
                 with torch.inference_mode():
                     priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
-                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
+                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_history_batch)
                 hist_latent_loss = (priv_latent_batch.detach() - hist_latent_batch).norm(p=2, dim=1).mean()
                 self.hist_encoder_optimizer.zero_grad()
                 hist_latent_loss.backward()

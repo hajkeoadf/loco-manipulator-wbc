@@ -166,18 +166,18 @@ class BipedSF(BaseTask):
                 2 * torch.rand_like(self.obs_buf) - 1
             ) * self.noise_scale_vec
 
-        # 重新初始化obs_history，使其维度正确
-        # 实际观测维度是 obs_buf.shape[1]，而不是 self.num_obs
-        actual_obs_dim = self.obs_buf.shape[1]  # 应该是 242 (54 + 187)
-        if self.obs_history.shape[1] != actual_obs_dim * self.obs_history_length:
-            self.obs_history = torch.zeros(
-                self.num_envs,
-                actual_obs_dim * self.obs_history_length,
-                device=self.device,
-                dtype=torch.float,
-            )
-        
-        # 更新观测历史
+        # update obs_history
+        if self.cfg.terrain.measure_heights:
+            actual_obs_dim = self.cfg.env.num_observations + self.cfg.env.num_height_samples
+        else:
+            actual_obs_dim = self.cfg.env.num_observations
+        # if self.obs_history.shape[1] != actual_obs_dim * self.obs_history_length:
+        #     self.obs_history = torch.zeros(
+        #         self.num_envs,
+        #         actual_obs_dim * self.obs_history_length,
+        #         device=self.device,
+        #         dtype=torch.float,
+        #     )
         self.obs_history = torch.cat(
             (self.obs_history[:, actual_obs_dim :], self.obs_buf), dim=-1
         )
@@ -198,8 +198,6 @@ class BipedSF(BaseTask):
             -self.torque_limits, 
             self.torque_limits
         )
-    
-
 
     def _get_noise_scale_vec(self, cfg):
         """Sets a vector used to scale the noise added to the observations.
@@ -211,7 +209,6 @@ class BipedSF(BaseTask):
         Returns:
             [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
         """
-        # 如果启用高度测量，添加高度采样点
         if self.cfg.terrain.measure_heights:
             total_obs_dim = self.cfg.env.num_observations + self.cfg.env.num_height_samples
         else:
@@ -647,7 +644,6 @@ class BipedSF(BaseTask):
                 Args:
                     env_ids (List[int]): Environments ids for which new commands are needed
                 """
-        print(self.command_ranges["lin_vel_x"])
         self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][1]
                                      - self.command_ranges["lin_vel_x"][0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
@@ -1083,13 +1079,11 @@ class BipedSF(BaseTask):
         return torch.exp(-ang_vel_error / self.cfg.rewards.ang_tracking_sigma)
 
     def _reward_stand_still(self):
-        """站立奖励：当命令接近零时奖励站立"""
         return torch.sum(self.foot_heights, dim=1) * (
             torch.norm(self.commands[:, :3], dim=1) < self.cfg.commands.min_norm
         )
 
     def _reward_feet_contact_forces(self):
-        """脚部接触力奖励：鼓励适当的接触力"""
         return torch.sum(
             (
                 self.contact_forces[:, self.feet_indices, 2]
@@ -1097,26 +1091,3 @@ class BipedSF(BaseTask):
             ).clip(min=0.0),
             dim=1,
         )
-    
-    def _reward_arm_stability(self):
-        """简化的机械臂稳定性奖励：惩罚机械臂关节速度过大"""
-        # 机械臂关节索引：8-13
-        arm_vel = self.dof_vel[:, 8:14]
-        return torch.sum(torch.square(arm_vel), dim=1)
-
-    def _reward_feet_air_time(self):
-        """步态奖励：鼓励脚在空中停留时间"""
-        contact = torch.norm(self.contact_forces[:, self.feet_indices], dim=-1) > 1.
-        contact_filt = torch.logical_or(contact, self.last_contacts)
-        self.last_contacts = contact
-        
-        first_contact = (self.feet_air_time * self.dt) > 0.
-        self.feet_air_time += self.dt
-        air_time = self.feet_air_time * first_contact * contact_filt
-        self.feet_air_time *= ~contact_filt
-        
-        return torch.sum(air_time, dim=1)
-
-    def _reward_stumble(self):
-        """防绊倒奖励：惩罚脚部侧向力过大"""
-        return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) > 5., dim=1)

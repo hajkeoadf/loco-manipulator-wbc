@@ -165,14 +165,14 @@ class BipedCfgSFWithArm(BipedCfgSF):
         
         stiffness = {
             # 双足关节
-            "abad_L_Joint": 10,
-            "hip_L_Joint": 10,
-            "knee_L_Joint": 10,
-            "ankle_L_Joint": 10,
-            "abad_R_Joint": 10,
-            "hip_R_Joint": 10,
-            "knee_R_Joint": 10,
-            "ankle_R_Joint": 10,
+            "abad_L_Joint": 45,
+            "hip_L_Joint": 45,
+            "knee_L_Joint": 45,
+            "ankle_L_Joint": 45,
+            "abad_R_Joint": 45,
+            "hip_R_Joint": 45,
+            "knee_R_Joint": 45,
+            "ankle_R_Joint": 45,
             # 机械臂关节
             "J1": 20,
             "J2": 20,
@@ -184,14 +184,14 @@ class BipedCfgSFWithArm(BipedCfgSF):
         
         damping = {
             # 双足关节
-            "abad_L_Joint": 0.2,
-            "hip_L_Joint": 0.2,
-            "knee_L_Joint": 0.2,
-            "ankle_L_Joint": 10,
-            "abad_R_Joint": 0.2,
-            "hip_R_Joint": 0.2,
-            "knee_R_Joint": 0.2,
-            "ankle_R_Joint": 10,
+            "abad_L_Joint": 1.5,
+            "hip_L_Joint": 1.5,
+            "knee_L_Joint": 1.5,
+            "ankle_L_Joint": 0.8,
+            "abad_R_Joint": 1.5,
+            "hip_R_Joint": 1.5,
+            "knee_R_Joint": 1.5,
+            "ankle_R_Joint": 0.8,
             # 机械臂关节
             "J1": 0.5,
             "J2": 0.5,
@@ -260,22 +260,32 @@ class BipedCfgSFWithArm(BipedCfgSF):
     class rewards:
         class scales:
             # 腿部奖励
-            termination = -0.0
-            tracking_lin_vel = 2.0
-            tracking_ang_vel = 0.5
-            lin_vel_z = -0.0
-            ang_vel_xy = -0.0
-            orientation = -0.5
-            torques = -0.0002
-            dof_vel = -0.0
-            dof_acc = -2.5e-8
-            base_height = -0.2
-            feet_air_time = 1.0
-            collision = -1.0
-            feet_stumble = -0.0
+            keep_balance = 1.0
+            tracking_lin_vel_x = 1.5
+            tracking_lin_vel_y = 1.5
+            tracking_ang_vel = 1
+            base_height = -10
+            lin_vel_z = -0.5
+            ang_vel_xy = -0.05
+            torques = -0.00008
+            dof_acc = -2.5e-7
             action_rate = -0.01
-            stand_still = -0.0
-            dof_pos_limits = -10.0
+            dof_pos_limits = -2.0
+            collision = -100 # -1
+            action_smooth = -0.01
+            orientation = -5.0
+            feet_distance = -100
+            feet_regulation = -0.05
+            tracking_contacts_shaped_force = -2.0
+            tracking_contacts_shaped_vel = -2.0
+            tracking_contacts_shaped_height = -2.0
+            feet_contact_forces = -0.002
+            ankle_torque_limits = -0.1
+            power = -2e-4
+            relative_feet_height_tracking = 1.0
+            zero_command_nominal_state = -10.0
+            keep_ankle_pitch_zero_in_air = 1.0
+            foot_landing_vel = -10.0
             
             # 机械臂奖励
             tracking_ee_cart = 1.0
@@ -283,7 +293,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
             tracking_ee_orn = 0.5
             arm_energy_abs_sum = -0.0001
 
-        only_positive_rewards = True
+        only_positive_rewards = False
         clip_reward = 100
         clip_single_reward = 5
         tracking_sigma = 0.2
