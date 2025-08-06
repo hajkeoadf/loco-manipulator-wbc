@@ -79,7 +79,8 @@ def play(args):
         else to_torch([1.0, 0.0, 0.0], device=env.device) if robot_type == "WF_TRON1A" else to_torch([1.5, 0.0, 0.0, 0.0, 0.0])
     action_scale = env.cfg.control.action_scale_pos if robot_type == "WF_TRON1A"\
         else env.cfg.control.action_scale
-    obs, obs_history, commands, _ = env.get_observations()
+    obs, critic_obs, obs_history = env.get_observations()
+    commands = obs[:, 34:39]
     # load policy
     train_cfg.runner.resume = True
     train_cfg.runner.load_run = args.load_run

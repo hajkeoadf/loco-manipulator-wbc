@@ -123,16 +123,27 @@ class RSLPPO:
             self.transition.hidden_states = hidden_states
         else:
             actions, actions_log_prob, values, adaptive_gains = self.actor_critic.act(obs, obs_history, critic_obs, hist_encoding)
+
+        self.transition.actions = actions
+        self.transition.actions_log_prob = actions_log_prob.detach()
+        self.transition.action_mean = self.actor_critic.action_mean().detach()
+        self.transition.action_sigma = self.actor_critic.action_std().detach()
+        self.transition.values = values.detach()
+        self.transition.adaptive_gains = adaptive_gains
+        self.transition.observations = obs
+        self.transition.critic_observations = critic_obs
+        self.transition.observations_history = obs_history
+
         return actions, actions_log_prob, values, adaptive_gains
 
     def process_env_step(self, rewards, arm_rewards, dones, infos):
-        self.transition.rewards = torch.cat([rewards, arm_rewards], dim=-1)
+        self.transition.rewards = torch.stack([rewards.clone(), arm_rewards.clone()], dim=-1)
         self.transition.dones = dones
-        self.transition.actions = infos['actions']
-        self.transition.values = infos['values']
-        self.transition.actions_log_prob = infos['actions_log_prob']
-        self.transition.action_mean = infos['action_mean']
-        self.transition.action_sigma = infos['action_sigma']
+        # self.transition.actions = infos['actions']
+        # self.transition.values = infos['values']
+        # self.transition.actions_log_prob = infos['actions_log_prob']
+        # self.transition.action_mean = infos['action_mean']
+        # self.transition.action_sigma = infos['action_sigma']
         
         # Store arm-specific information for torque supervision
         if self.torque_supervision:
@@ -142,6 +153,7 @@ class RSLPPO:
 
         self.storage.add_transitions(self.transition, self.torque_supervision)
         self.transition.clear()
+        self.actor_critic.reset(dones)
 
     def compute_returns(self, last_critic_obs):
         last_values = self.actor_critic.evaluate(last_critic_obs)
@@ -162,8 +174,8 @@ class RSLPPO:
             self.actor_critic.act(obs_batch, obs_history_batch, critic_obs_batch, False, hid_states_batch, masks_batch)
             actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
             value_batch = self.actor_critic.evaluate(critic_obs_batch, hid_states_batch, masks_batch)
-            mu_batch = self.actor_critic.action_mean
-            sigma_batch = self.actor_critic.action_std
+            mu_batch = self.actor_critic.action_mean()
+            sigma_batch = self.actor_critic.action_std()
             entropy_batch = self.actor_critic.entropy
 
             # Adaptation module update

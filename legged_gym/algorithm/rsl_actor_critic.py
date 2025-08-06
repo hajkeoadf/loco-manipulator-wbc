@@ -180,7 +180,7 @@ class ActorCritic(nn.Module):
 
             def forward(self, obs, obs_history, hist_encoding=False):
                 # Get encoded features
-                shared_input = obs
+                shared_input = obs[:, :self.num_prop]
                 if hist_encoding:
                     latent = self.infer_hist_latent(obs_history)
                 else:
@@ -207,7 +207,11 @@ class ActorCritic(nn.Module):
                 return self.priv_encoder(priv_obs)
 
             def infer_hist_latent(self, obs_history):
-                return self.history_encoder(obs_history)
+                # obs_history shape: [batch_size, obs_history_length * num_obs]
+                # 需要reshape为 [batch_size, obs_history_length, num_obs] 供history_encoder使用
+                batch_size = obs_history.shape[0]
+                obs_history_reshaped = obs_history.reshape(batch_size, self.num_hist, self.num_prop)
+                return self.history_encoder(obs_history_reshaped)
 
         # Critic with separate value heads
         class Critic(nn.Module):
@@ -325,7 +329,10 @@ class ActorCritic(nn.Module):
     def act(self, observations, obs_history, critic_observations, hist_encoding, hidden_states=None, masks=None):
         adaptive_gains = self.update_distribution(observations, obs_history, hist_encoding)
         actions = self.distribution.sample()
-        actions_log_prob = self.distribution.log_prob(actions).sum(dim=-1)
+        actions_log_prob = self.distribution.log_prob(actions)
+        leg_actions_log_prob = actions_log_prob[:, :8].sum(dim=-1, keepdim=True)
+        arm_actions_log_prob = actions_log_prob[:, 8:].sum(dim=-1, keepdim=True)
+        actions_log_prob = torch.cat([leg_actions_log_prob, arm_actions_log_prob], dim=-1)
         
         # Evaluate critic
         values = self.evaluate(critic_observations, hidden_states, masks)
@@ -333,7 +340,11 @@ class ActorCritic(nn.Module):
         return actions, actions_log_prob, values, adaptive_gains
 
     def get_actions_log_prob(self, actions):
-        return self.distribution.log_prob(actions).sum(dim=-1)
+        actions_log_prob = self.distribution.log_prob(actions)
+        leg_actions_log_prob = actions_log_prob[:, :8].sum(dim=-1, keepdim=True)
+        arm_actions_log_prob = actions_log_prob[:, 8:].sum(dim=-1, keepdim=True)
+        actions_log_prob = torch.cat([leg_actions_log_prob, arm_actions_log_prob], dim=-1)
+        return actions_log_prob
 
     def act_inference(self, observations, obs_history=None, hist_encoding=False):
         adaptive_gains = self.update_distribution(observations, obs_history, hist_encoding)
@@ -342,6 +353,12 @@ class ActorCritic(nn.Module):
     def evaluate(self, critic_observations, hidden_states=None, masks=None):
         value = self.critic(critic_observations) 
         return value
+
+    def action_mean(self): 
+        return self.distribution.mean
+    
+    def action_std(self):
+        return self.distribution.stddev
 
 def get_activation(act_name):
     if act_name == "elu":

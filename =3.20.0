@@ -1,0 +1,31 @@
+2 channel Terms of Service accepted
+Channels:
+ - defaults
+Platform: linux-64
+Collecting package metadata (repodata.json): - \ done
+Solving environment: / - done
+
+## Package Plan ##
+
+  environment location: /home/ril/anaconda3/envs/pointfoot_legged_gym
+
+  added / updated specs:
+    - protobuf
+
+
+The following packages will be downloaded:
+
+    package                    |            build
+    ---------------------------|-----------------
+    libprotobuf-4.25.3         |       he621ea3_0         2.8 MB
+    ------------------------------------------------------------
+                                           Total:         2.8 MB
+
+The following NEW packages will be INSTALLED:
+
+  libabseil          pkgs/main/linux-64::libabseil-20240116.2-cxx17_h6a678d5_0 
+  libprotobuf        pkgs/main/linux-64::libprotobuf-4.25.3-he621ea3_0 
+  protobuf           pkgs/main/linux-64::protobuf-4.25.3-py38h12ddb61_0 
+
+
+Proceed ([y]/n)? 

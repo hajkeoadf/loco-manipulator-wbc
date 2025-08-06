@@ -311,7 +311,7 @@ class BipedSF(BaseTask):
         env_upper = gymapi.Vec3(0.0, 0.0, 0.0)
         self.actor_handles = []
         self.envs = []
-        self.friction_coef = torch.zeros(
+        self.friction_coeffs = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device, requires_grad=False
         )
         self.restitution_coef = torch.zeros(
@@ -578,7 +578,6 @@ class BipedSF(BaseTask):
 
         if self.cfg.terrain.measure_heights or self.cfg.terrain.critic_measure_heights:
             self.measured_heights = self._get_heights()
-            print(f"self.measured_heights: {self.measured_heights}")
 
         self.base_height = torch.mean(
             self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1
@@ -644,22 +643,38 @@ class BipedSF(BaseTask):
                 Args:
                     env_ids (List[int]): Environments ids for which new commands are needed
                 """
-        self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][1]
-                                     - self.command_ranges["lin_vel_x"][0]) \
+        # self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][1]
+        #                              - self.command_ranges["lin_vel_x"][0]) \
+        #                             * torch.rand(len(env_ids), device=self.device) \
+        #                             + self.command_ranges["lin_vel_x"][0]
+        # self.commands[env_ids, 1] = (self.command_ranges["lin_vel_y"][1]
+        #                              - self.command_ranges["lin_vel_y"][0]) \
+        #                             * torch.rand(len(env_ids), device=self.device) \
+        #                             + self.command_ranges["lin_vel_y"][0]
+        # self.commands[env_ids, 2] = (self.command_ranges["ang_vel_yaw"][1]
+        #                              - self.command_ranges["ang_vel_yaw"][0]) \
+        #                             * torch.rand(len(env_ids), device=self.device) \
+        #                             + self.command_ranges["ang_vel_yaw"][0]
+        # self.commands[env_ids, 3] = (self.command_ranges["base_height"][1]
+        #                              - self.command_ranges["base_height"][0]) \
+        #                             * torch.rand(len(env_ids), device=self.device) \
+        #                             + self.command_ranges["base_height"][0]
+        self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][env_ids, 1]
+                                     - self.command_ranges["lin_vel_x"][env_ids, 0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["lin_vel_x"][0]
-        self.commands[env_ids, 1] = (self.command_ranges["lin_vel_y"][1]
-                                     - self.command_ranges["lin_vel_y"][0]) \
+                                    + self.command_ranges["lin_vel_x"][env_ids, 0]
+        self.commands[env_ids, 1] = (self.command_ranges["lin_vel_y"][env_ids, 1]
+                                     - self.command_ranges["lin_vel_y"][env_ids, 0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["lin_vel_y"][0]
-        self.commands[env_ids, 2] = (self.command_ranges["ang_vel_yaw"][1]
-                                     - self.command_ranges["ang_vel_yaw"][0]) \
+                                    + self.command_ranges["lin_vel_y"][env_ids, 0]
+        self.commands[env_ids, 2] = (self.command_ranges["ang_vel_yaw"][env_ids, 1]
+                                     - self.command_ranges["ang_vel_yaw"][env_ids, 0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["ang_vel_yaw"][0]
-        self.commands[env_ids, 3] = (self.command_ranges["base_height"][1]
-                                     - self.command_ranges["base_height"][0]) \
+                                    + self.command_ranges["ang_vel_yaw"][env_ids, 0]
+        self.commands[env_ids, 3] = (self.command_ranges["base_height"][env_ids, 1]
+                                     - self.command_ranges["base_height"][env_ids, 0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
-                                    + self.command_ranges["base_height"][0]
+                                    + self.command_ranges["base_height"][env_ids, 0]
 
         self._resample_stand_still_commands(env_ids, is_start)
 
@@ -763,26 +778,23 @@ class BipedSF(BaseTask):
             device=self.device,
             requires_grad=False,
         )
-        self.command_ranges["base_height"] = torch.zeros(
-            self.num_envs,
-            2,
-            dtype=torch.float,
-            device=self.device,
-            requires_grad=False,
-        )
-        self.command_ranges["base_height"][:] = torch.tensor(
-            self.cfg.commands.ranges.base_height
-        )
-        self.command_ranges["stand_still"] = torch.zeros(
-            self.num_envs,
-            2,
-            dtype=torch.float,
-            device=self.device,
-            requires_grad=False,
-        )
-        self.command_ranges["stand_still"][:] = torch.tensor(
-            self.cfg.commands.ranges.stand_still
-        )
+        
+        # 初始化所有command_ranges
+        self.command_ranges["lin_vel_x"] = torch.tensor(
+            self.cfg.commands.ranges.lin_vel_x, device=self.device
+        ).repeat(self.num_envs, 1)
+        self.command_ranges["lin_vel_y"] = torch.tensor(
+            self.cfg.commands.ranges.lin_vel_y, device=self.device
+        ).repeat(self.num_envs, 1)
+        self.command_ranges["ang_vel_yaw"] = torch.tensor(
+            self.cfg.commands.ranges.ang_vel_yaw, device=self.device
+        ).repeat(self.num_envs, 1)
+        self.command_ranges["base_height"] = torch.tensor(
+            self.cfg.commands.ranges.base_height, device=self.device
+        ).repeat(self.num_envs, 1)
+        self.command_ranges["stand_still"] = torch.tensor(
+            self.cfg.commands.ranges.stand_still, device=self.device
+        ).repeat(self.num_envs, 1)
 
         self.des_foot_height = torch.zeros(self.num_envs,
                                            dtype=torch.float,

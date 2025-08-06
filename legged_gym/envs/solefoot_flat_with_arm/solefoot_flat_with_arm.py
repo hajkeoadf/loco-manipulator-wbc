@@ -85,7 +85,7 @@ class BipedSFWithArm(BipedSF):
 
     def _get_noise_scale_vec(self, cfg):
         """Sets a vector used to scale the noise added to the observations."""
-        total_obs_dim = self.cfg.env.num_observations
+        total_obs_dim = self.cfg.env.num_observations + self.cfg.env.num_privileged_obs
 
         # Add height measurements if enabled
         if self.cfg.terrain.measure_heights:
@@ -112,11 +112,29 @@ class BipedSFWithArm(BipedSF):
         # Height measurements if enabled
         if self.cfg.terrain.measure_heights:
             noise_vec[self.num_obs+self.cfg.env.num_privileged_obs:] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
-            
+        
         return noise_vec
 
     def _parse_cfg(self, cfg):
         super()._parse_cfg(cfg)
+        
+        # 重新初始化command_ranges为张量（因为父类的_parse_cfg会将其重置为字典）
+        if hasattr(self, 'num_envs'):
+            self.command_ranges["lin_vel_x"] = torch.tensor(
+                self.cfg.commands.ranges.lin_vel_x, device=self.device, dtype=torch.float
+            ).repeat(self.num_envs, 1)
+            self.command_ranges["lin_vel_y"] = torch.tensor(
+                self.cfg.commands.ranges.lin_vel_y, device=self.device, dtype=torch.float
+            ).repeat(self.num_envs, 1)
+            self.command_ranges["ang_vel_yaw"] = torch.tensor(
+                self.cfg.commands.ranges.ang_vel_yaw, device=self.device, dtype=torch.float
+            ).repeat(self.num_envs, 1)
+            self.command_ranges["base_height"] = torch.tensor(
+                self.cfg.commands.ranges.base_height, device=self.device, dtype=torch.float
+            ).repeat(self.num_envs, 1)
+            self.command_ranges["stand_still"] = torch.tensor(
+                self.cfg.commands.ranges.stand_still, device=self.device, dtype=torch.float
+            ).repeat(self.num_envs, 1)
         
         # 机械臂相关配置
         self.goal_ee_ranges = class_to_dict(self.cfg.goal_ee.ranges)
@@ -390,15 +408,20 @@ class BipedSFWithArm(BipedSF):
 
         # 加入priv_obs
         if self.cfg.env.observe_priv:
+            print(f"mass_params_tensor shape: {self.mass_params_tensor.shape}")
+            print(f"friction_coeffs_tensor shape: {self.friction_coeffs_tensor.shape}")
+            # 将 friction_coeffs_tensor 扩展为 [batch_size, 1] 的形状
+            friction_coeffs_expanded = self.friction_coeffs_tensor.unsqueeze(-1)
+            print(f"friction_coeffs_expanded shape: {friction_coeffs_expanded.shape}")
             priv_buf = torch.cat((
                 self.mass_params_tensor,
-                self.friction_coeffs_tensor
+                friction_coeffs_expanded
             ), dim=-1)
+            print(f"priv_buf shape: {priv_buf.shape}")
             obs_buf = torch.cat([obs_buf, priv_buf], dim=-1)
 
         # 加入高度观测（如果有）
-        if self.cfg.terrain.measure_heights:
-            print(f"self.measured_heights: {self.measured_heights}")    
+        if self.cfg.terrain.measure_heights:   
             heights = (
                 torch.clip(
                     self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
@@ -529,7 +552,7 @@ class BipedSFWithArm(BipedSF):
         self._post_physics_step_callback()
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        self.reset_idx(env_ids, start=False)
+        self.reset_idx(env_ids)
         self.compute_observations()  # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
         self.last_actions[:, :, 1] = self.last_actions[:, :, 0]
@@ -549,7 +572,7 @@ class BipedSFWithArm(BipedSF):
         self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
 
 
-    def reset_idx(self, env_ids, start=False):
+    def reset_idx(self, env_ids):
         """Reset some environments.
             Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
             [Optional] calls self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids) and
@@ -565,20 +588,15 @@ class BipedSFWithArm(BipedSF):
         if self.cfg.terrain.curriculum:
             self._update_terrain_curriculum(env_ids)
         # avoid updating command curriculum at each step since the maximum command is common to all envs
-        # if self.cfg.commands.curriculum:
-        #     time_out_env_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
-        #     self.update_command_curriculum(time_out_env_ids)
-        if start:
-            command_env_ids = env_ids
-        else:
-            command_env_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
-        self._resample_commands(command_env_ids)
+        if self.cfg.commands.curriculum:
+            time_out_env_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
+            self.update_command_curriculum()
 
         # reset robot states
         self._reset_dofs(env_ids)
         self._reset_root_states(env_ids)
         self._check_walk_stability(env_ids)
-        self._resample_commands(command_env_ids)
+        self._resample_commands(env_ids)
         self._resample_ee_goal(env_ids, is_init=True)
         self._resample_gaits(env_ids)
 
@@ -601,7 +619,6 @@ class BipedSFWithArm(BipedSF):
             self.measured_heights = self._get_heights()
         # 使用完整的观测（包含高度测量）
         self.compute_observations()
-        self.obs_history[env_ids] = self.obs_buf[env_ids].repeat(1, self.obs_history_length)
         self.gait_indices[env_ids] = 0
         self.fail_buf[env_ids] = 0
         self.dof_pos_int[env_ids] = 0

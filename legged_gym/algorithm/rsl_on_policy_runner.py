@@ -33,6 +33,7 @@ import os
 from collections import deque
 import statistics
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -53,9 +54,9 @@ class RSLOnPolicyRunner:
         self.dagger_update_freq = self.alg_cfg['dagger_update_freq']
 
         # 获取观测维度
-        num_actor_obs = self.env.num_obs
-        num_hist_obs = num_actor_obs * self.env.get_num_hist_config()
-        num_critic_obs = self.env.num_critic_obs if hasattr(self.env, 'num_critic_obs') else self.env.num_obs
+        num_actor_obs = self.env.num_obs + self.env.get_num_priv()
+        num_hist_obs = self.env.num_obs * self.env.get_num_hist_config()
+        num_critic_obs = self.env.num_critic_obs if hasattr(self.env, 'num_critic_obs') else self.env.num_obs + self.env.get_num_priv()
         num_actions = self.env.num_actions
 
         # 创建Actor-Critic网络
@@ -100,12 +101,15 @@ class RSLOnPolicyRunner:
             mixing_schedule=self.alg_cfg['mixing_schedule'],
             priv_reg_coef_schedule=self.alg_cfg['priv_reg_coef_schedual'],
             dagger_update_freq=self.alg_cfg['dagger_update_freq'],
+            torque_supervision=False,
             device=self.device
         )
 
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
 
+        print(f"num_envs: {self.env.num_envs}")
+        print(f"num_steps_per_env: {self.num_steps_per_env}")
         # 初始化存储
         self.alg.init_storage(
             self.env.num_envs,
@@ -179,7 +183,6 @@ class RSLOnPolicyRunner:
             critic_obs.to(self.device),
             obs_history.to(self.device),
         )
-        print(f"obs shape in on policy runner: {obs.shape}")
 
         self.alg.actor_critic.train()  # 切换到训练模式
 
@@ -198,7 +201,7 @@ class RSLOnPolicyRunner:
         )
 
         tot_iter = self.current_learning_iteration + num_learning_iterations
-        for it in range(self.current_learning_iteration, tot_iter):
+        for it in tqdm(range(self.current_learning_iteration, tot_iter), desc="Learning iterations"):
             self.env.update_command_curriculum()
 
             start = time.time()
@@ -206,12 +209,12 @@ class RSLOnPolicyRunner:
 
             # Rollout
             with torch.inference_mode():
-                for i in range(self.num_steps_per_env):
+                for i in tqdm(range(self.num_steps_per_env), desc=f"Rollout (iter {it})", leave=False):
                     # 获取动作
                     actions, actions_log_prob, values, adaptive_gains = self.alg.act(obs, obs_history, critic_obs, hist_encoding)
                     
                     # 环境步进
-                    (obs, leg_rewards, arm_rewards, dones, infos, obs_history,critic_obs) = self.env.step(actions)
+                    (obs, leg_rewards, arm_rewards, dones, infos, obs_history, critic_obs) = self.env.step(actions)
                     
                     obs, obs_history, critic_obs, leg_rewards, arm_rewards, dones = (
                         obs.to(self.device),
@@ -256,7 +259,7 @@ class RSLOnPolicyRunner:
             if hist_encoding:
                 mean_hist_latent_loss = self.alg.update_dagger()
             else:
-                mean_value_loss, mean_surrogate_loss, mean_arm_torques_loss, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
+                mean_value_loss, mean_surrogate_loss, mean_arm_torques_loss, mean_torque_supervision_loss, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
             
             # 获取课程学习参数
             value_mixing_ratio = self.alg.get_value_mixing_ratio()

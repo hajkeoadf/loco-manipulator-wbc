@@ -182,7 +182,7 @@ class TaskRegistry:
         if log_root == "default":
             log_root = os.path.join(
                 LEGGED_GYM_ROOT_DIR,
-                "logs",
+                "runs",
                 args.task,
                 train_cfg.runner.experiment_name,
             )

@@ -37,9 +37,9 @@ class BipedCfgSFWithArm(BipedCfgSF):
     class env:
         num_envs = 4096
         num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
-        num_critic_observations = 3 + num_observations
+        num_critic_observations = 5 + num_observations
         num_height_samples = 187
-        num_privileged_obs = 4
+        num_privileged_obs = 5
         num_actions = 14  # 8 (legs) + 6 (arm)
         ee_idx = 10 # !!!!要确认
         env_spacing = 3.0

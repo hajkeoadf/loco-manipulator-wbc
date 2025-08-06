@@ -98,12 +98,18 @@ class RolloutStorage:
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
-        self.observations_history[self.step].copy_(transition.observations_history)
+        
+        # 修复：将observations_history展平后再复制
+        if transition.observations_history is not None:
+            # obs_history shape: [num_envs, obs_history_length, num_obs] -> [num_envs, obs_history_length * num_obs]
+            obs_history_flat = transition.observations_history.reshape(transition.observations_history.shape[0], -1)
+            self.observations_history[self.step].copy_(obs_history_flat)
+        
         if self.privileged_observations is not None: 
             self.privileged_observations[self.step].copy_(transition.critic_observations)
         self.actions[self.step].copy_(transition.actions)
         self.rewards[self.step].copy_(transition.rewards)
-        self.dones[self.step].copy_(transition.dones)
+        self.dones[self.step].copy_(transition.dones.view(-1, 1))
         self.values[self.step].copy_(transition.values)
         self.actions_log_prob[self.step].copy_(transition.actions_log_prob)
         self.mu[self.step].copy_(transition.action_mean)
