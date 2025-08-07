@@ -45,6 +45,7 @@ from legged_gym.utils import (
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import time
 
 
 def play(args):
@@ -73,25 +74,16 @@ def play(args):
 
     # prepare environment
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
-    # get robot_type
-    robot_type = os.getenv("ROBOT_TYPE")
-    commands_val = to_torch([0.5, 0.0, 0, 0], device=env.device) if robot_type.startswith("PF")\
-        else to_torch([1.0, 0.0, 0.0], device=env.device) if robot_type == "WF_TRON1A" else to_torch([1.5, 0.0, 0.0, 0.0, 0.0])
-    action_scale = env.cfg.control.action_scale_pos if robot_type == "WF_TRON1A"\
-        else env.cfg.control.action_scale
-    obs, critic_obs, obs_history = env.get_observations()
-    commands = obs[:, 34:39]
+    
     # load policy
     train_cfg.runner.resume = True
     train_cfg.runner.load_run = args.load_run
     train_cfg.runner.checkpoint = args.checkpoint
-    # train_cfg.runner.checkpoint = -1
 
     ppo_runner, train_cfg = task_registry.make_alg_runner(
         env=env, name=args.task, args=args, train_cfg=train_cfg
     )
     policy = ppo_runner.get_inference_policy(device=env.device)
-    encoder = ppo_runner.get_inference_encoder(device=env.device)
 
     # export policy as a jit module (used to run it from C++)
     if EXPORT_POLICY:
@@ -109,13 +101,13 @@ def play(args):
             ppo_runner.alg.actor_critic.actor,
             path,
             "policy",
-            ppo_runner.alg.actor_critic.num_actor_obs,
+            ppo_runner.alg.actor_critic.num_prop+20,
         )
         export_mlp_as_onnx(
-            ppo_runner.alg.encoder,
+            ppo_runner.alg.actor_critic.history_encoder,
             path,
             "encoder",
-            ppo_runner.alg.encoder.num_input_dim,
+            ppo_runner.alg.actor_critic.history_encoder.num_input_dim,
         )
 
     logger = Logger(env.dt)
@@ -125,25 +117,27 @@ def play(args):
     stop_rew_log = (
         env.max_episode_length + 1
     )  # number of steps before print average episode rewards
-    # camera_position = np.array(env_cfg.viewer.pos, dtype=np.float64)
-    # camera_vel = np.array([1.0, 1.0, 0.0])
-    # camera_direction = np.array(env_cfg.viewer.lookat) - np.array(env_cfg.viewer.pos)
     img_idx = 0
+    
+    # 重置环境并获取初始观测
+    env.reset()
+    obs, obs_history, commands, _ = env.get_observations()
+    
     print('DEBUG obs_history shape:', obs_history.shape)
     print('DEBUG obs shape:', obs.shape)
     print('DEBUG commands shape:', commands.shape)
-    est = None
+    
     for i in range(10 * int(env.max_episode_length)):
-        est = encoder(obs_history)
-        # print('DEBUG est shape:', est.shape)
-        # print('DEBUG concatenated input shape:', torch.cat((est, obs, commands), dim=-1).shape)
-        actions = policy(torch.cat((est, obs, commands), dim=-1).detach())
-
-        env.commands[:, :] = commands_val
-
+        start_time = time.time()
+        
+        # 使用策略生成动作
+        actions = policy(obs.detach(), obs_history.detach(), hist_encoding=True)
+        
+        # 环境步进
         obs, rews, dones, infos, obs_history, commands, _ = env.step(
             actions.detach()
         )
+        
         if RECORD_FRAMES:
             if i % 2:
                 filename = os.path.join(
@@ -156,6 +150,7 @@ def play(args):
                 )
                 env.gym.write_viewer_image_to_file(env.viewer, filename)
                 img_idx += 1
+                
         if MOVE_CAMERA:
             camera_offset = np.array(env_cfg.viewer.pos)
             target_position = np.array(
@@ -163,12 +158,11 @@ def play(args):
             )
             target_position[2] = 0
             camera_position = target_position + camera_offset
-            # env.set_camera(camera_position, target_position)
 
         if i < stop_state_log:
             logger.log_states(
                 {
-                    "dof_pos_target": actions[robot_index, joint_index].item() * action_scale,
+                    "dof_pos_target": actions[robot_index, joint_index].item() * env.cfg.control.action_scale,
                     "dof_pos": (
                         env.dof_pos[robot_index, joint_index]
                         - env.raw_default_dof_pos[joint_index]
@@ -190,18 +184,6 @@ def play(args):
                     .numpy(),
                 }
             )
-            # print(torch.sum(env.power[robot_index, :]).item())
-            if est != None:
-                logger.log_states(
-                    {
-                        "est_lin_vel_x": est[robot_index, 0].item()
-                        / env.cfg.normalization.obs_scales.lin_vel,
-                        "est_lin_vel_y": est[robot_index, 1].item()
-                        / env.cfg.normalization.obs_scales.lin_vel,
-                        "est_lin_vel_z": est[robot_index, 2].item()
-                        / env.cfg.normalization.obs_scales.lin_vel,
-                    }
-                )
         elif i == stop_state_log:
             logger.plot_states()
 
@@ -212,6 +194,11 @@ def play(args):
                     logger.log_rewards(infos["episode"], num_episodes)
         elif i == stop_rew_log:
             logger.print_rewards()
+            
+        # 控制帧率
+        stop_time = time.time()
+        duration = stop_time - start_time
+        time.sleep(max(0.02 - duration, 0))
 
 
 if __name__ == "__main__":

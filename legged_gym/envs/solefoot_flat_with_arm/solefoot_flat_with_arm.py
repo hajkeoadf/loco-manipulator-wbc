@@ -408,16 +408,13 @@ class BipedSFWithArm(BipedSF):
 
         # 加入priv_obs
         if self.cfg.env.observe_priv:
-            print(f"mass_params_tensor shape: {self.mass_params_tensor.shape}")
-            print(f"friction_coeffs_tensor shape: {self.friction_coeffs_tensor.shape}")
             # 将 friction_coeffs_tensor 扩展为 [batch_size, 1] 的形状
-            friction_coeffs_expanded = self.friction_coeffs_tensor.unsqueeze(-1)
-            print(f"friction_coeffs_expanded shape: {friction_coeffs_expanded.shape}")
+            # friction_coeffs_expanded = self.friction_coeffs_tensor.unsqueeze(-1)
+            # print(f"friction_coeffs_expanded shape: {friction_coeffs_expanded.shape}")
             priv_buf = torch.cat((
                 self.mass_params_tensor,
-                friction_coeffs_expanded
+                self.friction_coeffs_tensor
             ), dim=-1)
-            print(f"priv_buf shape: {priv_buf.shape}")
             obs_buf = torch.cat([obs_buf, priv_buf], dim=-1)
 
         # 加入高度观测（如果有）

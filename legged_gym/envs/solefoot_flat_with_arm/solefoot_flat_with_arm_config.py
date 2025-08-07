@@ -239,17 +239,17 @@ class BipedCfgSFWithArm(BipedCfgSF):
             tracking_lin_vel_x = 1.5
             tracking_lin_vel_y = 1.5
             tracking_ang_vel = 1
-            base_height = -10
+            base_height = -2.0  # 从 -10 减少到 -2.0
             lin_vel_z = -0.5
             ang_vel_xy = -0.05
             torques = -0.00008
             dof_acc = -2.5e-7
             action_rate = -0.01
             dof_pos_limits = -2.0
-            collision = -100 # -1
+            collision = -10.0  # 从 -100 减少到 -10.0
             action_smooth = -0.01
-            orientation = -1.0
-            feet_distance = -100
+            orientation = -0.5  # 从 -1.0 减少到 -0.5
+            feet_distance = -10.0  # 从 -100 减少到 -10.0
             feet_regulation = -0.05
             tracking_contacts_shaped_force = -2.0
             tracking_contacts_shaped_vel = -2.0
@@ -262,10 +262,10 @@ class BipedCfgSFWithArm(BipedCfgSF):
             keep_ankle_pitch_zero_in_air = 1.0
             foot_landing_vel = -10.0
             
-            # 机械臂奖励
-            tracking_ee_cart = 1.0
-            tracking_ee_sphere = 1.0
-            tracking_ee_orn = 0.5
+            # 机械臂奖励 - 增加权重
+            tracking_ee_cart = 2.0  # 从 1.0 增加到 2.0
+            tracking_ee_sphere = 2.0  # 从 1.0 增加到 2.0
+            tracking_ee_orn = 1.0  # 从 0.5 增加到 1.0
             arm_energy_abs_sum = -0.0001
 
         only_positive_rewards = False
@@ -368,23 +368,23 @@ class BipedCfgPPOSFWithArm(BipedCfgPPOSF):
         value_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        entropy_coef = 0.01
+        entropy_coef = 0.05  # 从 0.01 增加到 0.05，鼓励探索
         num_learning_epochs = 5
         num_mini_batches = 4
-        learning_rate = 1.0e-3
+        learning_rate = 5.0e-4  # 从 1.0e-3 减少到 5.0e-4
         schedule = "adaptive"
         gamma = 0.99
         lam = 0.95
         desired_kl = 0.01
         max_grad_norm = 1.0
-        est_learning_rate = 1.0e-3
+        est_learning_rate = 5.0e-4  # 从 1.0e-3 减少到 5.0e-4
         ts_learning_rate = 1.0e-4
         critic_take_latent = True
 
-        mixing_schedule=[1.0, 0, 3000] if not RESUME else [1.0, 0, 1]
+        mixing_schedule=[0.3, 0, 3000] if not RESUME else [0.3, 0, 1]  # 从 1.0 减少到 0.3
 
         dagger_update_freq = 20
-        priv_reg_coef_schedual = [0, 0.1, 3000, 7000] if not RESUME else [0, 1, 1000, 1000]
+        priv_reg_coef_schedual = [0, 0.05, 3000, 7000] if not RESUME else [0, 0.05, 1000, 1000]  # 从 0.1 减少到 0.05
 
     class runner:
         encoder_class_name = "MLP_Encoder"

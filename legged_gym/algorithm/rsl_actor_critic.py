@@ -74,9 +74,37 @@ class StateHistoryEncoder(nn.Module):
         # nd * T * n_proprio
         nd = obs.shape[0]
         T = self.tsteps
+        
+        # Debug: Check for NaN in input obs
+        if torch.isnan(obs).any():
+            print("WARNING: NaN detected in StateHistoryEncoder input obs")
+            print(f"obs shape: {obs.shape}")
+            print(f"NaN count: {torch.isnan(obs).sum()}")
+        
         projection = self.encoder(obs.reshape([nd * T, -1])) # do projection for n_proprio -> 32
+        
+        # Debug: Check for NaN in projection
+        if torch.isnan(projection).any():
+            print("WARNING: NaN detected in StateHistoryEncoder projection")
+            print(f"projection shape: {projection.shape}")
+            print(f"NaN count: {torch.isnan(projection).sum()}")
+        
         output = self.conv_layers(projection.reshape([nd, T, -1]).permute((0, 2, 1)))
+        
+        # Debug: Check for NaN in conv output
+        if torch.isnan(output).any():
+            print("WARNING: NaN detected in StateHistoryEncoder conv output")
+            print(f"conv output shape: {output.shape}")
+            print(f"NaN count: {torch.isnan(output).sum()}")
+        
         output = self.linear_output(output)
+        
+        # Debug: Check for NaN in final output
+        if torch.isnan(output).any():
+            print("WARNING: NaN detected in StateHistoryEncoder final output")
+            print(f"final output shape: {output.shape}")
+            print(f"NaN count: {torch.isnan(output).sum()}")
+        
         return output
 
 
@@ -178,7 +206,7 @@ class ActorCritic(nn.Module):
                 # Action std
                 self.log_std = nn.Parameter(torch.ones(num_leg_actions + num_arm_actions, device=device) * np.log(init_std))
 
-            def forward(self, obs, obs_history, hist_encoding=False):
+            def forward(self, obs, obs_history, hist_encoding: bool = False):
                 # Get encoded features
                 shared_input = obs[:, :self.num_prop]
                 if hist_encoding:
@@ -186,12 +214,43 @@ class ActorCritic(nn.Module):
                 else:
                     latent = self.infer_priv_latent(obs)
                 
+                # Debug: Check for NaN in latent
+                if torch.isnan(latent).any():
+                    print("WARNING: NaN detected in latent")
+                    print(f"latent shape: {latent.shape}")
+                    print(f"NaN count: {torch.isnan(latent).sum()}")
+                
                 shared_input = torch.cat([shared_input, latent], dim=-1)
+                
+                # Debug: Check for NaN in shared_input
+                if torch.isnan(shared_input).any():
+                    print("WARNING: NaN detected in shared_input")
+                    print(f"shared_input shape: {shared_input.shape}")
+                    print(f"NaN count: {torch.isnan(shared_input).sum()}")
+                
                 shared_features = self.shared(shared_input)
+                
+                # Debug: Check for NaN in shared_features
+                if torch.isnan(shared_features).any():
+                    print("WARNING: NaN detected in shared_features")
+                    print(f"shared_features shape: {shared_features.shape}")
+                    print(f"NaN count: {torch.isnan(shared_features).sum()}")
                 
                 # Generate actions
                 leg_actions = self.leg_head(shared_features)
                 arm_actions = self.arm_head(shared_features)
+                
+                # Debug: Check for NaN in individual action heads
+                if torch.isnan(leg_actions).any():
+                    print("WARNING: NaN detected in leg_actions")
+                    print(f"leg_actions shape: {leg_actions.shape}")
+                    print(f"NaN count: {torch.isnan(leg_actions).sum()}")
+                
+                if torch.isnan(arm_actions).any():
+                    print("WARNING: NaN detected in arm_actions")
+                    print(f"arm_actions shape: {arm_actions.shape}")
+                    print(f"NaN count: {torch.isnan(arm_actions).sum()}")
+                
                 actions = torch.cat([leg_actions, arm_actions], dim=-1)
                 
                 # Adaptive gains (if enabled)
@@ -321,8 +380,39 @@ class ActorCritic(nn.Module):
         # # Combine all features
         # combined_obs = torch.cat([observations, hist_latent, priv_latent], dim=-1)
         
+        # Debug: Check for NaN in inputs
+        if torch.isnan(observations).any():
+            print("WARNING: NaN detected in observations")
+            print(f"observations shape: {observations.shape}")
+            print(f"NaN count: {torch.isnan(observations).sum()}")
+        
+        if obs_history is not None and torch.isnan(obs_history).any():
+            print("WARNING: NaN detected in obs_history")
+            print(f"obs_history shape: {obs_history.shape}")
+            print(f"NaN count: {torch.isnan(obs_history).sum()}")
+        
         # Get actions and adaptive gains
         actions, adaptive_gains = self.actor(observations, obs_history, hist_encoding)
+        
+        # Debug: Check for NaN in actions
+        if torch.isnan(actions).any():
+            print("WARNING: NaN detected in actions")
+            print(f"actions shape: {actions.shape}")
+            print(f"NaN count: {torch.isnan(actions).sum()}")
+            print(f"actions min: {actions.min()}, max: {actions.max()}")
+            
+            # Check individual action heads
+            leg_actions = actions[:, :8]
+            arm_actions = actions[:, 8:]
+            if torch.isnan(leg_actions).any():
+                print(f"NaN in leg_actions: {torch.isnan(leg_actions).sum()}")
+            if torch.isnan(arm_actions).any():
+                print(f"NaN in arm_actions: {torch.isnan(arm_actions).sum()}")
+        
+        # Debug: Check log_std
+        if torch.isnan(self.actor.log_std).any():
+            print("WARNING: NaN detected in log_std")
+            print(f"log_std: {self.actor.log_std}")
         
         # Create distribution
         self.distribution = Normal(actions, self.actor.log_std.exp())
@@ -362,6 +452,17 @@ class ActorCritic(nn.Module):
     
     def action_std(self):
         return self.distribution.stddev
+
+    def __call__(self, observations, obs_history, hist_encoding: bool = False):
+        """Inference call for the policy"""
+        if hist_encoding:
+            # 使用历史编码器
+            actions, adaptive_gains = self.act_inference(observations, obs_history, hist_encoding=True)
+        else:
+            # 使用特权信息编码器
+            actions, adaptive_gains = self.act_inference(observations, obs_history, hist_encoding=False)
+        
+        return actions
 
 def get_activation(act_name):
     if act_name == "elu":
