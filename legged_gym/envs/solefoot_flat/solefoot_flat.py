@@ -945,9 +945,54 @@ class BipedSF(BaseTask):
         return reward
 
     def _reward_orientation(self):
-        # Penalize non flat base orientation
-        reward = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
-        return reward
+        """Multi-objective orientation reward balancing stability and reachability."""
+        # 获取目标信息
+        target_ee_local = self.curr_ee_goal_cart
+        target_distance = torch.norm(target_ee_local, dim=-1)
+        
+        # 获取当前姿态
+        gravity_x = self.projected_gravity[:, 0]
+        gravity_y = self.projected_gravity[:, 1]
+        
+        # 计算稳定性奖励（保持水平）
+        stability_reward = -(gravity_x ** 2 + gravity_y ** 2)
+        
+        # 计算可达性奖励（允许适度倾斜）
+        reachability_reward = torch.zeros_like(stability_reward)
+        
+        # 根据目标方向计算理想倾斜
+        target_direction = target_ee_local / (target_distance.unsqueeze(-1) + 1e-6)
+        
+        # 计算理想倾斜角度（基于目标方向）
+        ideal_tilt_x = -target_direction[:, 0] * 0.25  # 前倾/后倾
+        ideal_tilt_y = -target_direction[:, 1] * 0.25  # 左倾/右倾
+        
+        # 计算可达性误差
+        reachability_error = torch.sum(torch.square(torch.stack([
+            gravity_x - ideal_tilt_x,
+            gravity_y - ideal_tilt_y
+        ], dim=-1)), dim=-1)
+        
+        reachability_reward = -reachability_error
+        
+        # 根据任务难度调整权重
+        task_difficulty = torch.clamp(target_distance / 0.4, 0.0, 1.0)
+        
+        # 简单任务：更重视稳定性
+        # 困难任务：更重视可达性
+        stability_weight = 1.0 - 0.5 * task_difficulty
+        reachability_weight = 0.5 * task_difficulty
+        
+        # 组合奖励
+        combined_reward = (stability_weight * stability_reward + 
+                        reachability_weight * reachability_reward)
+        
+        # 添加安全限制
+        max_safe_tilt = 0.4
+        unsafe_tilt = torch.clamp(torch.abs(torch.stack([gravity_x, gravity_y], dim=-1)) - max_safe_tilt, min=0.0)
+        safety_penalty = 10.0 * torch.sum(unsafe_tilt, dim=-1)
+        
+        return combined_reward - safety_penalty
 
     def _reward_ankle_torque_limits(self):
         torque_limit = torch.cat((self.torque_limits[3].view(1) * self.cfg.rewards.soft_torque_limit,

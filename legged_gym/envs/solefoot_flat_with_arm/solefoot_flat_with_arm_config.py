@@ -35,7 +35,7 @@ RESUME = True
 
 class BipedCfgSFWithArm(BipedCfgSF):
     class env:
-        num_envs = 4096
+        num_envs = 8196
         num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
         num_critic_observations = 5 + num_observations
         num_height_samples = 187
@@ -51,31 +51,6 @@ class BipedCfgSFWithArm(BipedCfgSF):
         action_delay = 0  # 动作延迟
         observe_priv = True  # 是否使用privileged observations
 
-        # privileged obs flags
-        # priv_observe_friction = True
-        # priv_observe_friction_indep = True
-        # priv_observe_ground_friction = False
-        # priv_observe_ground_friction_per_foot = False
-        # priv_observe_restitution = True
-        # priv_observe_base_mass = True
-        # priv_observe_com_displacement = True
-        # priv_observe_motor_strength = False
-        # priv_observe_motor_offset = False
-        # priv_observe_joint_friction = True
-        # priv_observe_Kp_factor = True
-        # priv_observe_Kd_factor = True
-        # priv_observe_contact_forces = False
-        # priv_observe_contact_states = False
-        # priv_observe_body_velocity = False
-        # priv_observe_foot_height = False
-        # priv_observe_body_height = False
-        # priv_observe_gravity = False
-        # priv_observe_terrain_type = False
-        # priv_observe_clock_inputs = False
-        # priv_observe_doubletime_clock_inputs = False
-        # priv_observe_halftime_clock_inputs = False
-        # priv_observe_desired_contact_states = False
-        # priv_observe_dummy_variable = False
 
     class goal_ee:
         command_mode = 'cart'  # 'cart' or 'sphere'
@@ -201,7 +176,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
             "J6": 0.5,
         }
         
-        decimation = 4
+        decimation = 8
         user_torque_limit = 80.0
         max_power = 1000.0
 
@@ -273,7 +248,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
             dof_pos_limits = -2.0
             collision = -100 # -1
             action_smooth = -0.01
-            orientation = -5.0
+            orientation = -1.0
             feet_distance = -100
             feet_regulation = -0.05
             tracking_contacts_shaped_force = -2.0
@@ -415,7 +390,7 @@ class BipedCfgPPOSFWithArm(BipedCfgPPOSF):
         encoder_class_name = "MLP_Encoder"
         policy_class_name = "ActorCritic"
         algorithm_class_name = "RSLPPO"
-        num_steps_per_env = 24
+        num_steps_per_env = 40
         max_iterations = 10000
         logger = "tensorboard"
         exptid = ""

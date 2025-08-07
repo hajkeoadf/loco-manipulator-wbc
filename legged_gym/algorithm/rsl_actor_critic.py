@@ -304,7 +304,10 @@ class ActorCritic(nn.Module):
 
     @property
     def entropy(self):
-        return self.distribution.entropy().sum(dim=-1)
+        entropy = self.distribution.entropy()
+        leg_entropy_sum = entropy[:, :8].sum(dim=-1, keepdim=True)
+        arm_entropy_sum = entropy[:, 8:].sum(dim=-1, keepdim=True)
+        return torch.cat([leg_entropy_sum, arm_entropy_sum], dim=-1)
 
     def update_distribution(self, observations, obs_history, hist_encoding):
         # # Process observations
