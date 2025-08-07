@@ -289,17 +289,17 @@ install_pointfoot_legged_gym() {
     info "${yellow}安装 pointfoot-legged-gym 库成功"
 }
 
-install_basic_tools
+# install_basic_tools
 
-install_nvidia_driver
+# install_nvidia_driver
 
-install_anaconda
+# install_anaconda
 
-install_pytorch
+# install_pytorch
 
 install_isaac_gym
 
-install_pointfoot_legged_gym
+# install_pointfoot_legged_gym
 
 if [ $reboot_needed -eq 1 ]; then
     read -p "安装完成需要重启才能生效，是否现在重启系统？(y/n): " answer
