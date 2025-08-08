@@ -195,8 +195,14 @@ class BipedSFWithArm(BipedSF):
     def _create_envs(self):
         super()._create_envs()
         
-        # 获取机械臂末端执行器索引
-        self.ee_idx = self.body_names_to_idx.get("J6_Link", self.cfg.env.ee_idx)
+        # 获取机械臂末端执行器索引 - 修复：使用正确的链接名称
+        self.ee_idx = self.body_names_to_idx.get("link6", self.cfg.env.ee_idx)
+        
+        # 调试：打印所有刚体名称和索引
+        print("Available body names and indices:")
+        for name, idx in self.body_names_to_idx.items():
+            print(f"  {name}: {idx}")
+        print(f"Selected ee_idx: {self.ee_idx}")
 
     def _init_arm_variables(self):
         """Initialize arm-related variables."""
