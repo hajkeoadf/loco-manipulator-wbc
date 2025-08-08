@@ -408,13 +408,20 @@ class BipedSFWithArm(BipedSF):
 
         # 加入priv_obs
         if self.cfg.env.observe_priv:
-            # 将 friction_coeffs_tensor 扩展为 [batch_size, 1] 的形状
-            # friction_coeffs_expanded = self.friction_coeffs_tensor.unsqueeze(-1)
-            # print(f"friction_coeffs_expanded shape: {friction_coeffs_expanded.shape}")
-            priv_buf = torch.cat((
-                self.mass_params_tensor,
-                self.friction_coeffs_tensor
-            ), dim=-1)
+            # 检查 friction_coeffs_tensor 的维度
+            if len(self.friction_coeffs_tensor.shape) == 1:
+                # 如果是一维，扩展为 [batch_size, 1] 的形状
+                friction_coeffs_expanded = self.friction_coeffs_tensor.unsqueeze(-1)
+                priv_buf = torch.cat((
+                    self.mass_params_tensor,
+                    friction_coeffs_expanded
+                ), dim=-1)
+            else:
+                # 如果已经是二维，直接使用原来的
+                priv_buf = torch.cat((
+                    self.mass_params_tensor,
+                    self.friction_coeffs_tensor
+                ), dim=-1)
             obs_buf = torch.cat([obs_buf, priv_buf], dim=-1)
 
         # 加入高度观测（如果有）
@@ -568,6 +575,9 @@ class BipedSFWithArm(BipedSF):
         self.ee_orn = self.rigid_body_state[:, self.ee_idx, 3:7]
         self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
 
+        self._draw_debug_vis()
+        self._draw_ee_goal()
+
 
     def reset_idx(self, env_ids):
         """Reset some environments.
@@ -683,7 +693,7 @@ class BipedSFWithArm(BipedSF):
 
     def _draw_debug_vis(self):
         """Draw debug visualizations for arm."""
-        super()._draw_debug_vis()
+        # super()._draw_debug_vis()
         
         # 绘制末端执行器目标位置
         sphere_geom = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(1, 1, 0))

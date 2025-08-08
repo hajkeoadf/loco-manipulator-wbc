@@ -107,7 +107,7 @@ def play(args):
             ppo_runner.alg.actor_critic.history_encoder,
             path,
             "encoder",
-            ppo_runner.alg.actor_critic.history_encoder.num_input_dim,
+            ppo_runner.alg.actor_critic.num_prop,
         )
 
     logger = Logger(env.dt)
@@ -121,11 +121,11 @@ def play(args):
     
     # 重置环境并获取初始观测
     env.reset()
-    obs, obs_history, commands, _ = env.get_observations()
+    obs, critic_obs, obs_history = env.get_observations()
     
-    print('DEBUG obs_history shape:', obs_history.shape)
     print('DEBUG obs shape:', obs.shape)
-    print('DEBUG commands shape:', commands.shape)
+    print('DEBUG obs_history shape:', obs_history.shape)
+    print('DEBUG critic_obs shape:', critic_obs.shape)
     
     for i in range(10 * int(env.max_episode_length)):
         start_time = time.time()
@@ -134,7 +134,7 @@ def play(args):
         actions = policy(obs.detach(), obs_history.detach(), hist_encoding=True)
         
         # 环境步进
-        obs, rews, dones, infos, obs_history, commands, _ = env.step(
+        obs, rews, arm_rew, dones, infos, obs_history, critic_obs = env.step(
             actions.detach()
         )
         

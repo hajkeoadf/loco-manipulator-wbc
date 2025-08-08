@@ -261,7 +261,17 @@ def export_mlp_as_onnx(mlp, path, name, input_dim):
     model = copy.deepcopy(mlp).to("cpu")
     model.eval()
 
-    dummy_input = torch.randn(input_dim)
+    # 检查是否是 history_encoder，如果是则创建三维输入
+    if "history_encoder" in name or hasattr(model, 'tsteps'):
+        # history_encoder 需要三维输入 [batch_size, num_hist, num_prop]
+        batch_size = 1
+        num_hist = getattr(model, 'tsteps', 10)  # 默认10个时间步
+        num_prop = input_dim // num_hist if input_dim % num_hist == 0 else input_dim
+        dummy_input = torch.randn(batch_size, num_hist, num_prop)
+    else:
+        # 普通 MLP 使用二维输入 [batch_size, input_dim]
+        dummy_input = torch.randn(1, input_dim)
+    
     input_names = ["mlp_input"]
     output_names = ["mlp_output"]
 
