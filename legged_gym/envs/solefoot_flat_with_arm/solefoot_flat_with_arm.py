@@ -176,24 +176,48 @@ class BipedSFWithArm(BipedSF):
                 requires_grad=False,
             )
         
-        # 添加机械臂奖励函数
-        self.arm_reward_scales = class_to_dict(self.cfg.rewards.scales)
-        for key in list(self.arm_reward_scales.keys()):
-            scale = self.arm_reward_scales[key]
-            if scale == 0:
-                self.arm_reward_scales.pop(key)
+        # 定义机械臂专用奖励函数列表
+        arm_reward_names = [
+            'tracking_ee_sphere',
+            'tracking_ee_cart', 
+            'tracking_ee_orn',
+            'arm_energy_abs_sum'
+        ]
         
+        # 只添加机械臂相关的奖励函数
+        all_reward_scales = class_to_dict(self.cfg.rewards.scales)
+        self.arm_reward_scales = {}
         self.arm_reward_functions = []
         self.arm_reward_names = []
-        for name, scale in self.arm_reward_scales.items():
-            if name == "termination":
-                continue
-            self.arm_reward_names.append(name)
-            name = '_reward_' + name
-            self.arm_reward_functions.append(getattr(self, name))
+        
+        for name in arm_reward_names:
+            if name in all_reward_scales and all_reward_scales[name] != 0:
+                self.arm_reward_scales[name] = all_reward_scales[name]
+                self.arm_reward_names.append(name)
+                reward_func_name = '_reward_' + name
+                if hasattr(self, reward_func_name):
+                    self.arm_reward_functions.append(getattr(self, reward_func_name))
+                else:
+                    print(f"⚠️  警告: 找不到奖励函数 {reward_func_name}")
+        
+        # 添加termination奖励（如果存在）
+        if 'termination' in all_reward_scales and all_reward_scales['termination'] != 0:
+            self.arm_reward_scales['termination'] = all_reward_scales['termination']
+
+        # 验证奖励函数
+        print(f"\n🏆 机械臂奖励函数 (共{len(self.arm_reward_names)}个):")
+        for name in self.arm_reward_names:
+            scale = self.arm_reward_scales.get(name, 0)
+            print(f"  ✅ {name}: scale={scale}")
+        
+        if 'termination' in self.arm_reward_scales:
+            print(f"  ✅ termination: scale={self.arm_reward_scales['termination']}")
+            
+        print("="*60)
 
     def _create_envs(self):
         super()._create_envs()
+        # self._prepare_reward_function()
         
         # 获取机械臂末端执行器索引 - 修复：使用正确的链接名称
         self.ee_idx = self.body_names_to_idx.get("link6", self.cfg.env.ee_idx)
@@ -224,13 +248,6 @@ class BipedSFWithArm(BipedSF):
         print(f"  腿部动作: 0-7 (8个)")
         print(f"  机械臂动作: 8-13 (6个)")
         
-        # 验证奖励函数
-        print(f"\n🏆 机械臂奖励函数:")
-        for name in self.arm_reward_names:
-            scale = self.arm_reward_scales.get(name, 0)
-            print(f"  ✅ {name}: scale={scale}")
-            
-        print("="*60)
 
     def _init_arm_variables(self):
         """Initialize arm-related variables."""
@@ -342,8 +359,8 @@ class BipedSFWithArm(BipedSF):
     def _get_init_start_ee_sphere(self):
         """Initialize starting end-effector position in spherical coordinates."""
         init_start_ee_cart = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
-        init_start_ee_cart[:, 0] = 0.15
-        init_start_ee_cart[:, 2] = 0.15
+        init_start_ee_cart[:, 0] = 0.3  # 增加x距离
+        init_start_ee_cart[:, 2] = 0.25  # 增加z高度，使起始位置更高
         self.init_start_ee_sphere = cart2sphere(init_start_ee_cart)
 
     def _resample_ee_goal_sphere_once(self, env_ids):
@@ -423,8 +440,22 @@ class BipedSFWithArm(BipedSF):
 
     def _compute_torques(self, actions):
         """Compute torques for both legs and arm."""
-        # 直接使用父类的计算方法，因为父类已经处理了所有14个DOF
-        return super()._compute_torques(actions)
+        # 使用父类方法计算所有关节的PD控制扭矩
+        pd_torques = super()._compute_torques(actions)
+        
+        # 根据配置决定是否使用操作空间控制
+        if hasattr(self.cfg.control, 'torque_supervision') and self.cfg.control.torque_supervision:
+            # 获取操作空间控制扭矩
+            try:
+                arm_osc_torques = self.get_arm_ee_control_torques()
+                # 将操作空间控制扭矩应用到机械臂关节（8-13）
+                pd_torques[:, 8:14] += arm_osc_torques
+            except Exception as e:
+                print(f"⚠️  操作空间控制计算失败: {e}")
+                # 如果操作空间控制失败，继续使用PD控制
+                pass
+        
+        return pd_torques
 
     def compute_observations(self):
         """Compute observations including arm-related ones."""
@@ -477,17 +508,7 @@ class BipedSFWithArm(BipedSF):
             obs_buf = obs_buf + noise
 
         self.obs_buf = obs_buf
-        self.critic_obs_buf = obs_buf  
-
-        # # 计算obs_history
-        # self.obs_history_buf = torch.where(
-        #     (self.episode_length_buf <= 1)[:, None, None], 
-        #     torch.stack([obs_buf] * self.cfg.env.obs_history_length, dim=1),
-        #     torch.cat([
-        #         self.obs_history_buf[:, 1:],
-        #         obs_buf.unsqueeze(1)
-        #     ], dim=1)
-        # )   
+        self.critic_obs_buf = obs_buf   
 
         # 更新历史观测缓冲区
         curr_hist_obs = obs_buf[:, :self.num_obs]
@@ -546,7 +567,7 @@ class BipedSFWithArm(BipedSF):
 
     def _reward_arm_energy_abs_sum(self):
         """Reward for arm energy consumption."""
-        return torch.sum(torch.abs(self.torques[:, 14:] * self.dof_vel[:, 14:]), dim=1)
+        return torch.sum(torch.abs(self.torques[:, 8:14] * self.dof_vel[:, 8:14]), dim=1)
 
     def post_physics_step(self):
         """check terminations, compute observations and rewards
@@ -610,15 +631,18 @@ class BipedSFWithArm(BipedSF):
         self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
 
         # 🔍 添加机械臂运动调试输出
-        self._debug_arm_motion()
+        # self._debug_arm_motion()
 
-        self._draw_debug_vis()
-        self._draw_ee_goal()
+        if self.viewer:
+            self.gym.clear_lines(self.viewer)
+            self._draw_debug_vis()
+            # 暂时禁用_draw_ee_goal以避免张量维度错误
+            # self._draw_ee_goal()
 
     def _debug_arm_motion(self):
         """调试机械臂运动状态"""
-        # 每100步输出一次调试信息（第一个环境）
-        if self.episode_length_buf[0] % 100 == 0:
+        # 每20步输出一次调试信息（第一个环境），但跳过步数=0的情况
+        if self.episode_length_buf[0] % 20 == 0 and self.episode_length_buf[0] > 0:
             env_id = 0  # 只看第一个环境
             
             print("\n" + "="*60)
@@ -661,7 +685,7 @@ class BipedSFWithArm(BipedSF):
             print(f"  能量惩罚: {energy_reward:+.4f}")
             
             # 4. 运动检测
-            arm_motion = torch.norm(arm_joint_vel).item()
+            arm_motion = np.linalg.norm(arm_joint_vel)
             ee_motion = torch.norm(self.ee_vel[env_id, :3]).item()
             
             print(f"\n🏃 运动检测:")
@@ -796,25 +820,114 @@ class BipedSFWithArm(BipedSF):
         )
 
     def _draw_debug_vis(self):
-        """Draw debug visualizations for arm."""
+        """Draw debug visualizations for arm with detailed target analysis."""
         # super()._draw_debug_vis()
         
         # 绘制末端执行器目标位置
         sphere_geom = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(1, 1, 0))
         transformed_target_ee = torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
-        
+
         # 绘制当前末端执行器位置
         sphere_geom_2 = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(0, 0, 1))
         ee_pose = self.rigid_body_state[:, self.ee_idx, :3]
         
+        # 每100步输出一次详细的目标生成分析
+        if hasattr(self, 'episode_length_buf') and self.episode_length_buf[0] % 100 == 0 and self.episode_length_buf[0] > 0:
+            self._print_target_analysis(transformed_target_ee, ee_pose)
+        
         for i in range(self.num_envs):
-            # 目标位置
+            # 目标位置（黄色球）
             sphere_pose = gymapi.Transform(gymapi.Vec3(transformed_target_ee[i, 0], transformed_target_ee[i, 1], transformed_target_ee[i, 2]), r=None)
             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose)
             
-            # 当前位置
+            # 当前位置（蓝色球）
             sphere_pose_2 = gymapi.Transform(gymapi.Vec3(ee_pose[i, 0], ee_pose[i, 1], ee_pose[i, 2]), r=None)
             gymutil.draw_lines(sphere_geom_2, self.gym, self.viewer, self.envs[i], sphere_pose_2)
+
+    def _print_target_analysis(self, target_positions, ee_positions):
+        """打印目标生成的详细分析信息"""
+        import numpy as np
+        
+        # 转换为numpy数组便于分析
+        targets = target_positions.cpu().numpy()
+        ee_pos = ee_positions.cpu().numpy()
+        
+        # 计算高度差
+        height_differences = targets[:, 2] - ee_pos[:, 2]
+        
+        # 计算3D距离
+        distances = np.sqrt(np.sum((targets - ee_pos)**2, axis=1))
+        
+        # 获取球坐标信息
+        target_spheres = self.curr_ee_goal_sphere.cpu().numpy()
+        
+        print("\n" + "🎯"*60)
+        print("🎯 机械臂目标生成实时分析")
+        print("🎯"*60)
+        
+        print(f"📊 环境数量: {self.num_envs}")
+        print(f"⏱️  当前步数: {self.episode_length_buf[0].item()}")
+        
+        print(f"\n📍 目标位置统计 (黄色球 - 世界坐标系):")
+        print(f"  X范围: [{np.min(targets[:, 0]):+.3f}, {np.max(targets[:, 0]):+.3f}] m (均值: {np.mean(targets[:, 0]):+.3f})")
+        print(f"  Y范围: [{np.min(targets[:, 1]):+.3f}, {np.max(targets[:, 1]):+.3f}] m (均值: {np.mean(targets[:, 1]):+.3f})")
+        print(f"  Z范围: [{np.min(targets[:, 2]):+.3f}, {np.max(targets[:, 2]):+.3f}] m (均值: {np.mean(targets[:, 2]):+.3f})")
+        
+        print(f"\n🤖 末端执行器位置统计 (蓝色球):")
+        print(f"  X范围: [{np.min(ee_pos[:, 0]):+.3f}, {np.max(ee_pos[:, 0]):+.3f}] m (均值: {np.mean(ee_pos[:, 0]):+.3f})")
+        print(f"  Y范围: [{np.min(ee_pos[:, 1]):+.3f}, {np.max(ee_pos[:, 1]):+.3f}] m (均值: {np.mean(ee_pos[:, 1]):+.3f})")
+        print(f"  Z范围: [{np.min(ee_pos[:, 2]):+.3f}, {np.max(ee_pos[:, 2]):+.3f}] m (均值: {np.mean(ee_pos[:, 2]):+.3f})")
+        
+        print(f"\n📏 高度差分析 (目标Z - 当前Z):")
+        print(f"  平均高度差: {np.mean(height_differences):+.3f} m")
+        print(f"  标准差: {np.std(height_differences):.3f} m")
+        print(f"  最小值: {np.min(height_differences):+.3f} m")
+        print(f"  最大值: {np.max(height_differences):+.3f} m")
+        
+        positive_height_ratio = np.sum(height_differences > 0) / len(height_differences) * 100
+        neutral_height_ratio = np.sum(np.abs(height_differences) <= 0.05) / len(height_differences) * 100
+        negative_height_ratio = np.sum(height_differences < -0.05) / len(height_differences) * 100
+        
+        print(f"  目标更高: {positive_height_ratio:.1f}% ({'✅' if positive_height_ratio > 60 else '⚖️' if positive_height_ratio > 40 else '❌'})")
+        print(f"  高度相近: {neutral_height_ratio:.1f}%")
+        print(f"  目标更低: {negative_height_ratio:.1f}% ({'❌' if negative_height_ratio > 40 else '⚖️' if negative_height_ratio > 20 else '✅'})")
+        
+        print(f"\n🎯 跟踪距离分析:")
+        print(f"  平均距离: {np.mean(distances):.3f} m")
+        print(f"  最小距离: {np.min(distances):.3f} m")
+        print(f"  最大距离: {np.max(distances):.3f} m")
+        
+        close_targets = np.sum(distances < 0.2) / len(distances) * 100
+        medium_targets = np.sum((distances >= 0.2) & (distances < 0.5)) / len(distances) * 100
+        far_targets = np.sum(distances >= 0.5) / len(distances) * 100
+        
+        print(f"  近距离目标 (<0.2m): {close_targets:.1f}%")
+        print(f"  中距离目标 (0.2-0.5m): {medium_targets:.1f}%")
+        print(f"  远距离目标 (>0.5m): {far_targets:.1f}%")
+        
+        print(f"\n🌐 球坐标分析:")
+        print(f"  半径范围: [{np.min(target_spheres[:, 0]):.3f}, {np.max(target_spheres[:, 0]):.3f}] m")
+        print(f"  俯仰角范围: [{np.degrees(np.min(target_spheres[:, 1])):.1f}°, {np.degrees(np.max(target_spheres[:, 1])):.1f}°]")
+        print(f"  方位角范围: [{np.degrees(np.min(target_spheres[:, 2])):.1f}°, {np.degrees(np.max(target_spheres[:, 2])):.1f}°]")
+        
+        # 显示前3个环境的详细信息
+        print(f"\n🔍 前{min(3, self.num_envs)}个环境详情:")
+        for i in range(min(3, self.num_envs)):
+            ee_pos_i = ee_pos[i]
+            target_i = targets[i]
+            sphere_i = target_spheres[i]
+            height_diff_i = height_differences[i]
+            dist_i = distances[i]
+            
+            status = "✅ 好" if height_diff_i > 0 and dist_i < 0.8 else "⚖️ 中等" if abs(height_diff_i) < 0.1 else "❌ 差"
+            
+            print(f"  环境{i}: {status}")
+            print(f"    末端执行器: [{ee_pos_i[0]:+.3f}, {ee_pos_i[1]:+.3f}, {ee_pos_i[2]:+.3f}]")
+            print(f"    目标位置:   [{target_i[0]:+.3f}, {target_i[1]:+.3f}, {target_i[2]:+.3f}]")
+            print(f"    高度差: {height_diff_i:+.3f}m, 距离: {dist_i:.3f}m")
+            print(f"    球坐标: r={sphere_i[0]:.3f}, θ={np.degrees(sphere_i[1]):.1f}°, φ={np.degrees(sphere_i[2]):.1f}°")
+        
+        print("🎯"*60)
 
     def _draw_ee_goal(self):
         """Draw end-effector goal trajectory."""
@@ -1056,7 +1169,8 @@ class BipedSFWithArm(BipedSF):
             # 生成测试动作：正弦波动作
             test_actions = torch.zeros_like(self.actions)
             for i in range(6):  # 6个机械臂关节
-                test_actions[:, 8+i] = 0.3 * torch.sin(2 * 3.14159 * step / 100 + i * 3.14159/3)
+                phase = torch.tensor(2 * 3.14159 * step / 100 + i * 3.14159/3, device=self.device)
+                test_actions[:, 8+i] = 0.3 * torch.sin(phase)
             
             # 应用测试动作
             self.actions = test_actions

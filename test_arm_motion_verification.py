@@ -3,12 +3,12 @@
 机械臂运动验证脚本
 用于确认Isaac Gym中的机械臂能够正常运动
 """
-
+import isaacgym
 import torch
 import numpy as np
 from legged_gym.envs import *
 from legged_gym.utils import get_args, task_registry
-import isaacgym
+
 
 def test_arm_motion():
     print("\n🚀 启动机械臂运动验证程序")
@@ -50,7 +50,8 @@ def test_arm_motion():
             
             # 机械臂动作：较大幅度的周期性运动
             for i in range(6):
-                actions[:, 8+i] = 0.5 * torch.sin(2 * np.pi * step / 50 + i * np.pi/3)
+                phase = torch.tensor(2 * np.pi * step / 50 + i * np.pi/3, device=env.device)
+                actions[:, 8+i] = 0.5 * torch.sin(phase)
             
             # 执行动作
             obs, rew, arm_rew, done, info, obs_history, critic_obs = env.step(actions)

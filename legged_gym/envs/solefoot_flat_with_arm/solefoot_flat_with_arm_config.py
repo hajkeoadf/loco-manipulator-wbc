@@ -30,7 +30,7 @@
 
 from legged_gym.envs.solefoot_flat.solefoot_flat_config import BipedCfgSF, BipedCfgPPOSF
 from legged_gym.envs.base.base_config import BaseConfig
-
+import numpy as np
 RESUME = True
 
 class BipedCfgSFWithArm(BipedCfgSF):
@@ -56,9 +56,9 @@ class BipedCfgSFWithArm(BipedCfgSF):
         command_mode = 'cart'  # 'cart' or 'sphere'
         traj_time = [2.0, 4.0]  # 轨迹时间范围
         hold_time = [1.0, 2.0]  # 保持时间范围
-        collision_lower_limits = [-0.5, -0.5, 0.0]  # 碰撞检测下限
-        collision_upper_limits = [0.5, 0.5, 0.8]  # 碰撞检测上限
-        underground_limit = -0.1  # 地下限制
+        collision_lower_limits = [-0.6, -0.6, 0.1]  # 碰撞检测下限 - 提高z下限避免目标过低
+        collision_upper_limits = [0.6, 0.6, 1.0]  # 碰撞检测上限 - 增加z上限给更多空间
+        underground_limit = 0.05  # 地下限制 - 提高地面限制
         num_collision_check_samples = 10  # 碰撞检测采样数
         sphere_error_scale = [1.0, 1.0, 1.0]  # 球坐标系误差缩放
         orn_error_scale = [1.0, 1.0, 1.0]  # 姿态误差缩放
@@ -70,13 +70,13 @@ class BipedCfgSFWithArm(BipedCfgSF):
         tracking_ee_reward_schedule = [0, 1]  # 跟踪奖励课程学习
         
         class ranges:
-            init_pos_l = [0.1, 0.3]  # 初始长度范围
-            init_pos_p = [-0.2, 0.2]  # 初始俯仰范围
-            init_pos_y = [-0.2, 0.2]  # 初始偏航范围
-            final_pos_l = [0.2, 0.4]  # 最终长度范围
-            final_pos_p = [-0.3, 0.3]  # 最终俯仰范围
-            final_pos_y = [-0.3, 0.3]  # 最终偏航范围
-            final_delta_orn = [[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.1]]  # 最终姿态变化范围
+            init_pos_l = [0.3, 0.5]  # 初始长度范围 - 减小以便更容易达到
+            init_pos_p = [1 * np.pi / 4, 1 * np.pi / 3]  # 初始俯仰范围 - 调整到机械臂更容易达到的水平区域
+            init_pos_y = [-1 * np.pi / 8, 1 * np.pi / 8]  # 初始偏航范围 - 减小范围
+            final_pos_l = [0.2, 0.7]  # 最终长度范围
+            final_pos_p = [- 2 * np.pi / 5, 1 * np.pi / 5]  # 最终俯仰范围
+            final_pos_y = [- 3 * np.pi / 5, 3 * np.pi / 5]  # 最终偏航范围
+            final_delta_orn = [[-0, 0], [-0, 0], [-0, 0]]  # 最终姿态变化范围
             final_tracking_ee_reward = 1.0  # 最终跟踪奖励
 
     class commands:
@@ -132,11 +132,11 @@ class BipedCfgSFWithArm(BipedCfgSF):
         }
 
     class control:
-        action_scale = 0.25
+        action_scale = 0.5  # 增加动作缩放以提高机械臂响应性
         control_type = "P"
         adaptive_arm_gains = False  # 是否使用自适应机械臂增益
         adaptive_arm_gains_scale = 10.0  # 自适应机械臂增益缩放
-        torque_supervision = False  # 是否使用力矩监督
+        torque_supervision = False  # 是否使用力矩监督 - 暂时禁用操作空间控制
         
         stiffness = {
             # 双足关节
@@ -148,13 +148,13 @@ class BipedCfgSFWithArm(BipedCfgSF):
             "hip_R_Joint": 45,
             "knee_R_Joint": 45,
             "ankle_R_Joint": 45,
-            # 机械臂关节
-            "J1": 20,
-            "J2": 20,
-            "J3": 20,
-            "J4": 20,
-            "J5": 20,
-            "J6": 20,
+            # 机械臂关节 - 增加刚度以提高响应性
+            "J1": 50,
+            "J2": 50,
+            "J3": 50,
+            "J4": 50,
+            "J5": 50,
+            "J6": 50,
         }
         
         damping = {
@@ -167,13 +167,13 @@ class BipedCfgSFWithArm(BipedCfgSF):
             "hip_R_Joint": 1.5,
             "knee_R_Joint": 1.5,
             "ankle_R_Joint": 0.8,
-            # 机械臂关节
-            "J1": 0.5,
-            "J2": 0.5,
-            "J3": 0.5,
-            "J4": 0.5,
-            "J5": 0.5,
-            "J6": 0.5,
+            # 机械臂关节 - 增加阻尼以提高稳定性
+            "J1": 2.0,
+            "J2": 2.0,
+            "J3": 2.0,
+            "J4": 2.0,
+            "J5": 2.0,
+            "J6": 2.0,
         }
         
         decimation = 8
@@ -274,7 +274,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
         tracking_sigma = 0.2
         ang_tracking_sigma = 0.25
         height_tracking_sigma = 0.01
-        tracking_ee_sigma = 0.1  # 末端执行器跟踪sigma
+        tracking_ee_sigma = 0.5  # 末端执行器跟踪sigma - 增大以提供更宽容的奖励范围
         soft_dof_pos_limit = 0.95
         soft_dof_vel_limit = 1.0
         soft_torque_limit = 0.8
