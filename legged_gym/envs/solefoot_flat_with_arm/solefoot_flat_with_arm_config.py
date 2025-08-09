@@ -70,8 +70,8 @@ class BipedCfgSFWithArm(BipedCfgSF):
         tracking_ee_reward_schedule = [0, 1]  # 跟踪奖励课程学习
         
         class ranges:
-            init_pos_l = [0.3, 0.5]  # 初始长度范围 - 减小以便更容易达到
-            init_pos_p = [1 * np.pi / 4, 1 * np.pi / 3]  # 初始俯仰范围 - 调整到机械臂更容易达到的水平区域
+            init_pos_l = [0.25, 0.4]  # 初始长度范围 - 进一步减小距离，更适合训练初期
+            init_pos_p = [1 * np.pi / 6, 1 * np.pi / 3]  # 初始俯仰范围 - 微调角度范围，避免过于极端的角度
             init_pos_y = [-1 * np.pi / 8, 1 * np.pi / 8]  # 初始偏航范围 - 减小范围
             final_pos_l = [0.2, 0.7]  # 最终长度范围
             final_pos_p = [- 2 * np.pi / 5, 1 * np.pi / 5]  # 最终俯仰范围

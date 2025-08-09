@@ -855,6 +855,14 @@ class BaseTask:
         """Prepares a list of reward functions, whcih will be called to compute the total reward.
         Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
         """
+        # 定义机械臂专用奖励函数列表（在基类中排除）
+        arm_reward_names = [
+            'tracking_ee_sphere',
+            'tracking_ee_cart', 
+            'tracking_ee_orn',
+            'arm_energy_abs_sum'
+        ]
+        
         # remove zero scales + multiply non-zero ones by dt
         for key in list(self.reward_scales.keys()):
             scale = self.reward_scales[key]
@@ -868,9 +876,17 @@ class BaseTask:
         for name, scale in self.reward_scales.items():
             if name == "termination":
                 continue
+            # 排除机械臂奖励函数
+            if name in arm_reward_names:
+                continue
             self.reward_names.append(name)
             name = "_reward_" + name
             self.reward_functions.append(getattr(self, name))
+
+        print(f"\n🏆 奖励函数 (共{len(self.reward_names)}个):")
+        for name in self.reward_names:
+            scale = self.reward_scales.get(name, 0)
+            print(f"  ✅ {name}: scale={scale}")
 
         # reward episode sums
         self.episode_sums = {
