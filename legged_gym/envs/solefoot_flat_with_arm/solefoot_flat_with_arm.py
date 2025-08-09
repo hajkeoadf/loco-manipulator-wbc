@@ -199,10 +199,38 @@ class BipedSFWithArm(BipedSF):
         self.ee_idx = self.body_names_to_idx.get("link6", self.cfg.env.ee_idx)
         
         # 调试：打印所有刚体名称和索引
+        print("\n" + "="*60)
+        print("🔧 机械臂系统初始化验证")
+        print("="*60)
         print("Available body names and indices:")
         for name, idx in self.body_names_to_idx.items():
-            print(f"  {name}: {idx}")
+            if "link" in name.lower() or "j" in name.lower():
+                print(f"  ✅ {name}: {idx}")
+            else:
+                print(f"     {name}: {idx}")
         print(f"Selected ee_idx: {self.ee_idx}")
+        
+        # 验证DOF名称
+        print(f"\nDOF Names (total: {len(self.dof_names)}):")
+        for i, dof_name in enumerate(self.dof_names):
+            if i >= 8:  # 机械臂关节
+                print(f"  ✅ DOF {i}: {dof_name} (ARM)")
+            else:  # 腿部关节
+                print(f"     DOF {i}: {dof_name} (LEG)")
+        
+        # 验证动作空间
+        print(f"\n🎮 动作空间验证:")
+        print(f"  总动作数: {self.num_actions}")
+        print(f"  腿部动作: 0-7 (8个)")
+        print(f"  机械臂动作: 8-13 (6个)")
+        
+        # 验证奖励函数
+        print(f"\n🏆 机械臂奖励函数:")
+        for name in self.arm_reward_names:
+            scale = self.arm_reward_scales.get(name, 0)
+            print(f"  ✅ {name}: scale={scale}")
+            
+        print("="*60)
 
     def _init_arm_variables(self):
         """Initialize arm-related variables."""
@@ -581,9 +609,79 @@ class BipedSFWithArm(BipedSF):
         self.ee_orn = self.rigid_body_state[:, self.ee_idx, 3:7]
         self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
 
+        # 🔍 添加机械臂运动调试输出
+        self._debug_arm_motion()
+
         self._draw_debug_vis()
         self._draw_ee_goal()
 
+    def _debug_arm_motion(self):
+        """调试机械臂运动状态"""
+        # 每100步输出一次调试信息（第一个环境）
+        if self.episode_length_buf[0] % 100 == 0:
+            env_id = 0  # 只看第一个环境
+            
+            print("\n" + "="*60)
+            print(f"🤖 机械臂运动调试信息 - 步数: {self.episode_length_buf[env_id].item()}")
+            print("="*60)
+            
+            # 1. 机械臂关节状态
+            arm_joint_pos = self.dof_pos[env_id, 8:14].cpu().numpy()  # 8-13是机械臂关节
+            arm_joint_vel = self.dof_vel[env_id, 8:14].cpu().numpy()
+            arm_actions = self.actions[env_id, 8:14].cpu().numpy()
+            arm_torques = self.torques[env_id, 8:14].cpu().numpy()
+            
+            print("📊 机械臂关节状态:")
+            for i, joint_name in enumerate(["J1", "J2", "J3", "J4", "J5", "J6"]):
+                print(f"  {joint_name}: pos={arm_joint_pos[i]:+.3f} rad, "
+                      f"vel={arm_joint_vel[i]:+.3f} rad/s, "
+                      f"action={arm_actions[i]:+.3f}, "
+                      f"torque={arm_torques[i]:+.3f} Nm")
+            
+            # 2. 末端执行器状态
+            ee_pos = self.ee_pos[env_id].cpu().numpy()
+            ee_target = self.curr_ee_goal_cart[env_id].cpu().numpy()
+            ee_error = torch.norm(self.ee_pos[env_id] - 
+                                (torch.cat([self.root_states[env_id, :2], self.z_invariant_offset[env_id]]) + 
+                                 quat_apply(self.base_yaw_quat[env_id], self.curr_ee_goal_cart[env_id]))).item()
+            
+            print(f"\n🎯 末端执行器状态:")
+            print(f"  当前位置: [{ee_pos[0]:+.3f}, {ee_pos[1]:+.3f}, {ee_pos[2]:+.3f}]")
+            print(f"  目标位置: [{ee_target[0]:+.3f}, {ee_target[1]:+.3f}, {ee_target[2]:+.3f}]")
+            print(f"  跟踪误差: {ee_error:.4f} m")
+            
+            # 3. 机械臂奖励
+            arm_reward = self.arm_rew_buf[env_id].item()
+            tracking_reward = self._reward_tracking_ee_cart()[env_id].item()
+            energy_reward = self._reward_arm_energy_abs_sum()[env_id].item() * self.arm_reward_scales.get('arm_energy_abs_sum', 0)
+            
+            print(f"\n💰 机械臂奖励:")
+            print(f"  总奖励: {arm_reward:+.4f}")
+            print(f"  跟踪奖励: {tracking_reward:+.4f}")
+            print(f"  能量惩罚: {energy_reward:+.4f}")
+            
+            # 4. 运动检测
+            arm_motion = torch.norm(arm_joint_vel).item()
+            ee_motion = torch.norm(self.ee_vel[env_id, :3]).item()
+            
+            print(f"\n🏃 运动检测:")
+            print(f"  关节运动幅度: {arm_motion:.4f} rad/s")
+            print(f"  末端执行器速度: {ee_motion:.4f} m/s")
+            
+            # 5. 运动状态判断
+            if arm_motion > 0.01:
+                print(f"  ✅ 机械臂正在运动！")
+            else:
+                print(f"  ⚠️  机械臂运动较小，可能静止")
+                
+            if ee_error > 0.1:
+                print(f"  🎯 末端执行器需要较大调整")
+            elif ee_error > 0.01:
+                print(f"  🎯 末端执行器正在微调")
+            else:
+                print(f"  ✅ 末端执行器已到达目标附近")
+            
+            print("="*60)
 
     def reset_idx(self, env_ids):
         """Reset some environments.
@@ -939,3 +1037,62 @@ class BipedSFWithArm(BipedSF):
         """Public method to update curriculum learning."""
         if self.cfg.commands.curriculum:
             self.update_command_curriculum()
+    
+    def test_arm_motion(self, test_duration=500):
+        """测试机械臂运动能力"""
+        print("\n" + "="*60)
+        print("🧪 开始机械臂运动测试")
+        print("="*60)
+        
+        # 记录初始状态
+        initial_arm_pos = self.dof_pos[0, 8:14].clone()
+        max_joint_change = torch.zeros(6, device=self.device)
+        
+        print(f"初始机械臂关节位置: {initial_arm_pos.cpu().numpy()}")
+        print(f"测试步数: {test_duration}")
+        print("开始测试...\n")
+        
+        for step in range(test_duration):
+            # 生成测试动作：正弦波动作
+            test_actions = torch.zeros_like(self.actions)
+            for i in range(6):  # 6个机械臂关节
+                test_actions[:, 8+i] = 0.3 * torch.sin(2 * 3.14159 * step / 100 + i * 3.14159/3)
+            
+            # 应用测试动作
+            self.actions = test_actions
+            
+            # 执行物理步进
+            self.torques = self._compute_torques(self.actions).view(self.torques.shape)
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
+            self.gym.simulate(self.sim)
+            self.gym.refresh_dof_state_tensor(self.sim)
+            self.gym.refresh_rigid_body_state_tensor(self.sim)
+            
+            # 记录最大关节变化
+            current_arm_pos = self.dof_pos[0, 8:14]
+            joint_change = torch.abs(current_arm_pos - initial_arm_pos)
+            max_joint_change = torch.maximum(max_joint_change, joint_change)
+            
+            # 每100步输出一次状态
+            if step % 100 == 0 and step > 0:
+                arm_vel = self.dof_vel[0, 8:14]
+                ee_pos = self.rigid_body_state[0, self.ee_idx, :3]
+                print(f"步数 {step}: 关节速度范围 [{arm_vel.min().item():.3f}, {arm_vel.max().item():.3f}] rad/s")
+                print(f"        末端执行器位置: [{ee_pos[0].item():.3f}, {ee_pos[1].item():.3f}, {ee_pos[2].item():.3f}]")
+        
+        # 最终测试结果
+        final_arm_pos = self.dof_pos[0, 8:14]
+        total_movement = torch.norm(final_arm_pos - initial_arm_pos).item()
+        
+        print("\n" + "="*60)
+        print("🧪 机械臂运动测试结果")
+        print("="*60)
+        print(f"最大关节变化: {max_joint_change.cpu().numpy()}")
+        print(f"总体运动幅度: {total_movement:.4f} rad")
+        
+        if total_movement > 0.1:
+            print("✅ 测试通过：机械臂能够正常运动！")
+        else:
+            print("❌ 测试失败：机械臂运动幅度过小")
+            
+        print("="*60)

@@ -262,11 +262,11 @@ class BipedCfgSFWithArm(BipedCfgSF):
             keep_ankle_pitch_zero_in_air = 1.0
             foot_landing_vel = -10.0
             
-            # 机械臂奖励 - 增加权重
-            tracking_ee_cart = 2.0  # 从 1.0 增加到 2.0
-            tracking_ee_sphere = 2.0  # 从 1.0 增加到 2.0
-            tracking_ee_orn = 1.0  # 从 0.5 增加到 1.0
-            arm_energy_abs_sum = -0.0001
+            # 机械臂奖励 - 大幅增加权重以鼓励运动
+            tracking_ee_cart = 5.0  # 大幅增加跟踪奖励
+            tracking_ee_sphere = 5.0  # 大幅增加跟踪奖励
+            tracking_ee_orn = 2.0  # 增加姿态跟踪奖励
+            arm_energy_abs_sum = -0.00005  # 减少能量惩罚，鼓励更多运动
 
         only_positive_rewards = False
         clip_reward = 100
