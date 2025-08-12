@@ -31,6 +31,9 @@
 import time
 import numpy as np
 import os
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.patches as patches
 
 from isaacgym import gymtorch, gymapi, gymutil
 from isaacgym.torch_utils import *
@@ -45,6 +48,10 @@ from legged_gym.utils.math import *
 from .solefoot_flat_with_arm_config import BipedCfgSFWithArm
 
 import torch
+
+# 设置matplotlib中文字体
+plt.rcParams['font.family'] = 'DejaVu Sans'
+plt.rcParams['axes.unicode_minus'] = False
 
 def cart2sphere(cart):
     """Convert cartesian coordinates to spherical coordinates"""
@@ -112,7 +119,6 @@ class BipedSFWithArm(BipedSF):
         # Height measurements if enabled
         if self.cfg.terrain.measure_heights:
             noise_vec[self.num_obs+self.cfg.env.num_privileged_obs:] = noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
-        
         return noise_vec
 
     def _parse_cfg(self, cfg):
@@ -204,50 +210,12 @@ class BipedSFWithArm(BipedSF):
         if 'termination' in all_reward_scales and all_reward_scales['termination'] != 0:
             self.arm_reward_scales['termination'] = all_reward_scales['termination']
 
-        # 验证奖励函数
-        print(f"\n🏆 机械臂奖励函数 (共{len(self.arm_reward_names)}个):")
-        for name in self.arm_reward_names:
-            scale = self.arm_reward_scales.get(name, 0)
-            print(f"  ✅ {name}: scale={scale}")
-        
-        if 'termination' in self.arm_reward_scales:
-            print(f"  ✅ termination: scale={self.arm_reward_scales['termination']}")
-            
-        print("="*60)
-
     def _create_envs(self):
         super()._create_envs()
         # self._prepare_reward_function()
         
         # 获取机械臂末端执行器索引 - 修复：使用正确的链接名称
         self.ee_idx = self.body_names_to_idx.get("link6", self.cfg.env.ee_idx)
-        
-        # 调试：打印所有刚体名称和索引
-        print("\n" + "="*60)
-        print("🔧 机械臂系统初始化验证")
-        print("="*60)
-        print("Available body names and indices:")
-        for name, idx in self.body_names_to_idx.items():
-            if "link" in name.lower() or "j" in name.lower():
-                print(f"  ✅ {name}: {idx}")
-            else:
-                print(f"     {name}: {idx}")
-        print(f"Selected ee_idx: {self.ee_idx}")
-        
-        # 验证DOF名称
-        print(f"\nDOF Names (total: {len(self.dof_names)}):")
-        for i, dof_name in enumerate(self.dof_names):
-            if i >= 8:  # 机械臂关节
-                print(f"  ✅ DOF {i}: {dof_name} (ARM)")
-            else:  # 腿部关节
-                print(f"     DOF {i}: {dof_name} (LEG)")
-        
-        # 验证动作空间
-        print(f"\n🎮 动作空间验证:")
-        print(f"  总动作数: {self.num_actions}")
-        print(f"  腿部动作: 0-7 (8个)")
-        print(f"  机械臂动作: 8-13 (6个)")
-        
 
     def _init_arm_variables(self):
         """Initialize arm-related variables."""
@@ -352,6 +320,10 @@ class BipedSFWithArm(BipedSF):
         
         # 期望姿态
         self.ee_orn_des = torch.tensor([0, 0.7071068, 0, 0.7071068], device=self.device).repeat((self.num_envs, 1))
+        
+        # 新增：世界坐标系中的固定目标位置
+        self.world_goal_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self.goal_generated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         self.obs_history_buf = torch.zeros(self.num_envs, self.cfg.env.obs_history_length, self.cfg.env.num_observations, device=self.device, dtype=torch.float)
         self.action_history_buf = torch.zeros(self.num_envs, self.action_delay + 2, self.num_actions, device=self.device, dtype=torch.float)
@@ -362,12 +334,83 @@ class BipedSFWithArm(BipedSF):
         init_start_ee_cart[:, 0] = 0.3  # 增加x距离
         init_start_ee_cart[:, 2] = 0.25  # 增加z高度，使起始位置更高
         self.init_start_ee_sphere = cart2sphere(init_start_ee_cart)
+        
+        # 初始化课程学习参数
+        self.curriculum_step = 0
+        self.max_curriculum_step = 10000  # 最大课程步数
 
     def _resample_ee_goal_sphere_once(self, env_ids):
-        """Resample end-effector goal in spherical coordinates."""
-        self.ee_goal_sphere[env_ids, 0] = torch_rand_float(self.goal_ee_l_ranges[0], self.goal_ee_l_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
-        self.ee_goal_sphere[env_ids, 1] = torch_rand_float(self.goal_ee_p_ranges[0], self.goal_ee_p_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
-        self.ee_goal_sphere[env_ids, 2] = torch_rand_float(self.goal_ee_y_ranges[0], self.goal_ee_y_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        """Resample end-effector goal in spherical coordinates with curriculum learning."""
+        # 获取当前末端执行器位置（相对于机器人基座）
+        current_ee_pos = self.ee_pos[env_ids] - torch.cat([self.root_states[env_ids, :2], self.z_invariant_offset[env_ids]], dim=1)
+        
+        # 计算课程进度（0到1之间）
+        curriculum_progress = torch.clamp(torch.tensor(self.curriculum_step / self.max_curriculum_step, device=self.device), 0.0, 1.0)
+        
+        # 获取初始位置的x坐标作为前方约束的基准
+        init_ee_cart = sphere2cart(self.init_start_ee_sphere[env_ids])
+        min_x_forward = init_ee_cart[:, 0] + 0.05  # 确保目标至少比初始位置前5cm
+        
+        # 基础范围（简单任务）
+        base_l_min, base_l_max = 0.15, 0.25  # 距离范围：0.15-0.25m
+        base_p_min, base_p_max = 0.0, np.pi/6  # 俯仰角范围：0-30度
+        base_y_min, base_y_max = -np.pi/6, np.pi/6  # 偏航角范围：-30到30度
+        
+        # 高级范围（困难任务）
+        advanced_l_min, advanced_l_max = 0.25, 0.6  # 距离范围：0.25-0.6m
+        advanced_p_min, advanced_p_max = -np.pi/6, np.pi/3  # 俯仰角范围：-30到60度
+        advanced_y_min, advanced_y_max = -np.pi/3, np.pi/3  # 偏航角范围：-60到60度
+        
+        # 根据课程进度插值范围
+        l_min = base_l_min + curriculum_progress * (advanced_l_min - base_l_min)
+        l_max = base_l_max + curriculum_progress * (advanced_l_max - base_l_max)
+        p_min = base_p_min + curriculum_progress * (advanced_p_min - base_p_min)
+        p_max = base_p_max + curriculum_progress * (advanced_p_max - base_p_max)
+        y_min = base_y_min + curriculum_progress * (advanced_y_min - base_y_min)
+        y_max = base_y_max + curriculum_progress * (advanced_y_max - base_y_min)
+        
+        # 生成球坐标目标
+        self.ee_goal_sphere[env_ids, 0] = torch_rand_float(l_min, l_max, (len(env_ids), 1), device=self.device).squeeze(1)
+        self.ee_goal_sphere[env_ids, 1] = torch_rand_float(p_min, p_max, (len(env_ids), 1), device=self.device).squeeze(1)
+        self.ee_goal_sphere[env_ids, 2] = torch_rand_float(y_min, y_max, (len(env_ids), 1), device=self.device).squeeze(1)
+        
+        # 确保目标始终在末端执行器前方（x方向必须大于初始位置）
+        # 将球坐标转换为笛卡尔坐标进行检查
+        generated_goals = sphere2cart(self.ee_goal_sphere[env_ids])
+        
+        # 检查x坐标是否满足前方要求
+        invalid_mask = generated_goals[:, 0] < min_x_forward
+        if torch.any(invalid_mask):
+            invalid_env_ids = env_ids[invalid_mask]
+            # 重新生成这些环境的目标，确保x >= min_x_forward
+            for i, env_id in enumerate(invalid_env_ids):
+                attempts = 0
+                while attempts < 20:  # 增加尝试次数
+                    # 重新生成球坐标，优先考虑前方位置
+                    # 调整距离范围，确保能产生足够前方的目标
+                    adjusted_l_min = max(0.2, min_x_forward[invalid_env_ids == env_id].item() * 0.8)  # 动态调整最小距离
+                    new_l = torch_rand_float(adjusted_l_min, l_max, (1, 1), device=self.device).item()
+                    new_p = torch_rand_float(p_min, p_max, (1, 1), device=self.device).item()
+                    new_y = torch_rand_float(y_min, y_max, (1, 1), device=self.device).item()
+                    
+                    # 转换为笛卡尔坐标检查
+                    new_cart = sphere2cart(torch.tensor([[new_l, new_p, new_y]], device=self.device))
+                    if new_cart[0, 0] >= min_x_forward[invalid_env_ids == env_id].item():  # x坐标满足前方要求
+                        self.ee_goal_sphere[env_id] = torch.tensor([new_l, new_p, new_y], device=self.device)
+                        break
+                    attempts += 1
+                
+                # 如果多次尝试都失败，使用安全的默认值（确保在前方）
+                if attempts >= 20:
+                    # 计算一个安全的球坐标，确保x坐标在前方
+                    safe_x = min_x_forward[invalid_env_ids == env_id].item() + 0.05  # 额外前5cm
+                    safe_z = 0.25  # 保持合理的高度
+                    safe_y = 0.0   # 保持中心位置
+                    
+                    # 转换为球坐标
+                    safe_cart = torch.tensor([[safe_x, safe_y, safe_z]], device=self.device)
+                    safe_sphere = cart2sphere(safe_cart).squeeze(0)
+                    self.ee_goal_sphere[env_id] = safe_sphere
 
     def _resample_ee_goal_orn_once(self, env_ids):
         """Resample end-effector orientation goal."""
@@ -393,6 +436,18 @@ class BipedSFWithArm(BipedSF):
                     
             self.ee_goal_cart[init_env_ids, :] = sphere2cart(self.ee_goal_sphere[init_env_ids, :])
             self.goal_timer[init_env_ids] = 0.0
+            
+            # 如果是初始化，将相对目标转换为世界坐标系并保存
+            if is_init:
+                # 获取机器人基座在世界坐标系中的位置
+                robot_base_world = self.root_states[init_env_ids, :3]
+                # 将相对目标转换为世界坐标系
+                relative_goals = sphere2cart(self.ee_goal_sphere[init_env_ids])
+                self.world_goal_pos[init_env_ids] = robot_base_world + relative_goals
+                self.goal_generated[init_env_ids] = True
+                
+                # 打印目标生成信息
+                self._print_goal_generation_info(init_env_ids)
 
     def collision_check(self, env_ids):
         """Check for collisions along the trajectory."""
@@ -403,13 +458,18 @@ class BipedSFWithArm(BipedSF):
         return collision_mask | underground_mask
 
     def update_curr_ee_goal(self):
-        """Update current end-effector goal based on trajectory."""
-        t = torch.clip(self.goal_timer / self.traj_timesteps, 0, 1)
-        self.curr_ee_goal_sphere[:] = torch.lerp(self.ee_start_sphere, self.ee_goal_sphere, t[:, None])
-        self.curr_ee_goal_cart[:] = sphere2cart(self.curr_ee_goal_sphere)
+        """Update current end-effector goal - 目标在世界坐标系中保持固定"""
+        # 目标位置在世界坐标系中保持固定，不跟随机器人移动
+        if torch.any(self.goal_generated):
+            # 使用固定的世界坐标目标
+            self.curr_ee_goal_cart[:] = self.world_goal_pos
+        
         self.goal_timer += 1
+        
+        # 只在episode结束时重新生成目标
         resample_id = (self.goal_timer > self.traj_total_timesteps).nonzero(as_tuple=False).flatten()
-        self._resample_ee_goal(resample_id)
+        if len(resample_id) > 0:
+            self._resample_ee_goal(resample_id)
 
     def get_arm_ee_control_torques(self):
         """Compute operational space control torques for the arm."""
@@ -425,9 +485,14 @@ class BipedSFWithArm(BipedSF):
         ee_orn_normalized = self.ee_orn / torch.norm(self.ee_orn, dim=-1).unsqueeze(-1)
         orn_err = orientation_error(self.ee_orn_des, ee_orn_normalized)
         
-        # 计算位置误差
-        pos_err = (torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + 
-                  quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart) - self.ee_pos)
+        # 计算位置误差 - 使用固定的世界坐标目标
+        if torch.any(self.goal_generated):
+            # 使用固定的世界坐标目标
+            pos_err = self.world_goal_pos - self.ee_pos
+        else:
+            # 兼容性：使用相对坐标目标
+            pos_err = (torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + 
+                      quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart) - self.ee_pos)
         
         # 组合误差
         dpose = torch.cat([pos_err, orn_err], -1)
@@ -547,16 +612,40 @@ class BipedSFWithArm(BipedSF):
 
     def _reward_tracking_ee_sphere(self):
         """Reward for tracking end-effector position in spherical coordinates."""
-        ee_pos_local = quat_rotate_inverse(self.base_yaw_quat, 
-                                         self.ee_pos - torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1))
-        ee_pos_error = torch.sum(torch.abs(cart2sphere(ee_pos_local) - self.curr_ee_goal_sphere) * self.sphere_error_scale, dim=1)
+        if torch.any(self.goal_generated):
+            # 使用固定的世界坐标目标
+            # 将世界坐标目标转换为相对于机器人基座的球坐标
+            robot_base_world = self.root_states[:, :3]
+            relative_targets = self.world_goal_pos - robot_base_world
+            relative_targets_sphere = cart2sphere(relative_targets)
+            
+            # 计算当前末端执行器相对于机器人基座的位置
+            ee_pos_local = quat_rotate_inverse(self.base_yaw_quat, 
+                                             self.ee_pos - torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1))
+            ee_pos_local_sphere = cart2sphere(ee_pos_local)
+            
+            # 计算球坐标误差
+            ee_pos_error = torch.sum(torch.abs(ee_pos_local_sphere - relative_targets_sphere) * self.sphere_error_scale, dim=1)
+        else:
+            # 兼容性：使用原来的相对坐标系统
+            ee_pos_local = quat_rotate_inverse(self.base_yaw_quat, 
+                                             self.ee_pos - torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1))
+            ee_pos_error = torch.sum(torch.abs(cart2sphere(ee_pos_local) - self.curr_ee_goal_sphere) * self.sphere_error_scale, dim=1)
+        
         return torch.exp(-ee_pos_error/self.cfg.rewards.tracking_ee_sigma)
 
     def _reward_tracking_ee_cart(self):
         """Reward for tracking end-effector position in cartesian coordinates."""
-        target_ee = (torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + 
-                    quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart))
-        ee_pos_error = torch.sum(torch.abs(self.ee_pos - target_ee), dim=1)
+        if torch.any(self.goal_generated):
+            # 使用固定的世界坐标目标
+            # 直接计算世界坐标系中的位置误差
+            ee_pos_error = torch.sum(torch.abs(self.ee_pos - self.world_goal_pos), dim=1)
+        else:
+            # 兼容性：使用原来的相对坐标系统
+            target_ee = (torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + 
+                        quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart))
+            ee_pos_error = torch.sum(torch.abs(self.ee_pos - target_ee), dim=1)
+        
         return torch.exp(-ee_pos_error/self.cfg.rewards.tracking_ee_sigma)
 
     def _reward_tracking_ee_orn(self):
@@ -629,6 +718,9 @@ class BipedSFWithArm(BipedSF):
         self.ee_pos = self.rigid_body_state[:, self.ee_idx, :3]
         self.ee_orn = self.rigid_body_state[:, self.ee_idx, 3:7]
         self.ee_vel = self.rigid_body_state[:, self.ee_idx, 7:]
+        
+        # 更新课程学习
+        self.update_curriculum()
 
         # 🔍 添加机械臂运动调试输出
         # self._debug_arm_motion()
@@ -664,10 +756,16 @@ class BipedSFWithArm(BipedSF):
             
             # 2. 末端执行器状态
             ee_pos = self.ee_pos[env_id].cpu().numpy()
-            ee_target = self.curr_ee_goal_cart[env_id].cpu().numpy()
-            ee_error = torch.norm(self.ee_pos[env_id] - 
-                                (torch.cat([self.root_states[env_id, :2], self.z_invariant_offset[env_id]]) + 
-                                 quat_apply(self.base_yaw_quat[env_id], self.curr_ee_goal_cart[env_id]))).item()
+            if self.goal_generated[env_id]:
+                # 使用固定的世界坐标目标
+                ee_target = self.world_goal_pos[env_id].cpu().numpy()
+                ee_error = torch.norm(self.ee_pos[env_id] - self.world_goal_pos[env_id]).item()
+            else:
+                # 兼容性：使用相对坐标目标
+                ee_target = self.curr_ee_goal_cart[env_id].cpu().numpy()
+                ee_error = torch.norm(self.ee_pos[env_id] - 
+                                    (torch.cat([self.root_states[env_id, :2], self.z_invariant_offset[env_id]]) + 
+                                     quat_apply(self.base_yaw_quat[env_id], self.curr_ee_goal_cart[env_id]))).item()
             
             print(f"\n🎯 末端执行器状态:")
             print(f"  当前位置: [{ee_pos[0]:+.3f}, {ee_pos[1]:+.3f}, {ee_pos[2]:+.3f}]")
@@ -734,6 +832,9 @@ class BipedSFWithArm(BipedSF):
         self._resample_commands(env_ids)
         self._resample_ee_goal(env_ids, is_init=True)
         self._resample_gaits(env_ids)
+        
+        # 打印初始末端执行器位置和目标位置的坐标差
+        self._print_ee_position_difference(env_ids)
 
         # reset buffers
         self.last_actions[env_ids] = 0.0
@@ -767,24 +868,6 @@ class BipedSFWithArm(BipedSF):
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf | self.edge_reset_buf
-
-    # def step(self, actions):
-    #     """Step the environment with both leg and arm actions."""
-    #     # 确保动作维度正确
-    #     if actions.shape[-1] != self.num_actions:
-    #         raise ValueError(f"Expected {self.num_actions} actions, got {actions.shape[-1]}")
-        
-    #     # 调用父类的step方法
-    #     obs_buf, rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf = super().step(actions)
-        
-    #     # 重新计算观测，确保包含arm相关信息
-    #     self.compute_observations()
-        
-    #     # 添加机械臂奖励到总奖励中
-    #     self.compute_arm_reward()
-        
-    #     # 返回正确的obs_buf（包含arm信息）
-    #     return self.obs_buf, rew_buf, self.arm_rew_buf, reset_buf, extras, obs_history, commands, critic_obs_buf
 
     def step(self, actions):
         self._action_clip(actions)
@@ -823,10 +906,15 @@ class BipedSFWithArm(BipedSF):
         """Draw debug visualizations for arm with detailed target analysis."""
         # super()._draw_debug_vis()
         
-        # 绘制末端执行器目标位置
+        # 绘制末端执行器目标位置 - 使用固定的世界坐标目标
         sphere_geom = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(1, 1, 0))
-        transformed_target_ee = torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
-
+        if torch.any(self.goal_generated):
+            # 使用固定的世界坐标目标，不跟随机器人移动
+            transformed_target_ee = self.world_goal_pos
+        else:
+            # 如果没有生成目标，使用相对坐标（兼容性）
+            transformed_target_ee = torch.cat([self.root_states[:, :2], self.z_invariant_offset], dim=1) + quat_apply(self.base_yaw_quat, self.curr_ee_goal_cart)
+        
         # 绘制当前末端执行器位置
         sphere_geom_2 = gymutil.WireframeSphereGeometry(0.05, 4, 4, None, color=(0, 0, 1))
         ee_pose = self.rigid_body_state[:, self.ee_idx, :3]
@@ -1150,6 +1238,22 @@ class BipedSFWithArm(BipedSF):
         """Public method to update curriculum learning."""
         if self.cfg.commands.curriculum:
             self.update_command_curriculum()
+        
+        # 更新机械臂课程进度
+        self.curriculum_step += 1
+        
+        # 每1000步输出一次课程进度
+        if self.curriculum_step % 1000 == 0:
+            progress = (self.curriculum_step / self.max_curriculum_step) * 100
+            print(f"🎯 机械臂课程进度: {progress:.1f}% ({self.curriculum_step}/{self.max_curriculum_step})")
+            
+            # 显示当前目标范围
+            curriculum_progress = torch.clamp(torch.tensor(self.curriculum_step / self.max_curriculum_step, device=self.device), 0.0, 1.0)
+            base_l_min, base_l_max = 0.15, 0.25
+            advanced_l_min, advanced_l_max = 0.25, 0.6
+            current_l_min = base_l_min + curriculum_progress * (advanced_l_min - base_l_min)
+            current_l_max = base_l_max + curriculum_progress * (advanced_l_max - base_l_max)
+            print(f"   当前距离范围: {current_l_min:.3f}m - {current_l_max:.3f}m")
     
     def test_arm_motion(self, test_duration=500):
         """测试机械臂运动能力"""
@@ -1210,3 +1314,124 @@ class BipedSFWithArm(BipedSF):
             print("❌ 测试失败：机械臂运动幅度过小")
             
         print("="*60)
+    
+    def _print_goal_generation_info(self, env_ids):
+        """打印目标生成过程的详细信息"""
+        if len(env_ids) == 0:
+            return
+            
+        print(f"\n🎯 目标生成过程信息 (环境ID: {env_ids.cpu().numpy()})")
+        print("-" * 60)
+        
+        for i, env_id in enumerate(env_ids):
+            # 获取初始位置
+            init_ee_sphere = self.init_start_ee_sphere[env_id]
+            init_ee_cart = sphere2cart(init_ee_sphere.unsqueeze(0)).squeeze(0)
+            
+            # 获取生成的目标
+            target_ee_sphere = self.ee_goal_sphere[env_id]
+            target_ee_cart = sphere2cart(target_ee_sphere.unsqueeze(0)).squeeze(0)
+            
+            print(f"环境 {env_id}:")
+            print(f"  初始位置: [{init_ee_cart[0]:+.3f}, {init_ee_cart[1]:+.3f}, {init_ee_cart[2]:+.3f}] m")
+            print(f"  相对目标: [{target_ee_cart[0]:+.3f}, {target_ee_cart[1]:+.3f}, {target_ee_cart[2]:+.3f}] m")
+            print(f"  球坐标目标: r={target_ee_sphere[0]:.3f}m, θ={torch.rad2deg(target_ee_sphere[1]):.1f}°, φ={torch.rad2deg(target_ee_sphere[2]):.1f}°")
+            
+            # 显示世界坐标目标
+            if self.goal_generated[env_id]:
+                world_goal = self.world_goal_pos[env_id]
+                print(f"  世界坐标目标: [{world_goal[0]:+.3f}, {world_goal[1]:+.3f}, {world_goal[2]:+.3f}] m")
+        
+        print("-" * 60)
+    
+    def _print_ee_position_difference(self, env_ids):
+        """打印每个环境的初始末端执行器位置和目标位置的坐标差"""
+        if len(env_ids) == 0:
+            return
+            
+        print(f"\n🎯 环境重置后的末端执行器位置分析 (环境ID: {env_ids.cpu().numpy()})")
+        print("-" * 80)
+        
+        for i, env_id in enumerate(env_ids):
+            # 获取初始末端执行器位置（相对于机器人基座）
+            init_ee_sphere = self.init_start_ee_sphere[env_id]
+            init_ee_cart = sphere2cart(init_ee_sphere.unsqueeze(0)).squeeze(0)
+            
+            # 获取目标末端执行器位置（相对于机器人基座）
+            target_ee_sphere = self.ee_goal_sphere[env_id]
+            target_ee_cart = sphere2cart(target_ee_sphere.unsqueeze(0)).squeeze(0)
+            
+            # 计算坐标差
+            position_diff = target_ee_cart - init_ee_cart
+            distance_diff = torch.norm(position_diff).item()
+            
+            print(f"环境 {env_id}:")
+            print(f"  初始位置 (球坐标): r={init_ee_sphere[0]:.3f}m, θ={torch.rad2deg(init_ee_sphere[1]):.1f}°, φ={torch.rad2deg(init_ee_sphere[2]):.1f}°")
+            print(f"  初始位置 (笛卡尔): [{init_ee_cart[0]:+.3f}, {init_ee_cart[1]:+.3f}, {init_ee_cart[2]:+.3f}] m")
+            print(f"  目标位置 (球坐标): r={target_ee_sphere[0]:.3f}m, θ={torch.rad2deg(target_ee_sphere[1]):.1f}°, φ={torch.rad2deg(target_ee_sphere[2]):.1f}°")
+            print(f"  目标位置 (笛卡尔): [{target_ee_cart[0]:+.3f}, {target_ee_cart[1]:+.3f}, {target_ee_cart[2]:+.3f}] m")
+            print(f"  位置差值 (笛卡尔): [{position_diff[0]:+.3f}, {position_diff[1]:+.3f}, {position_diff[2]:+.3f}] m")
+            print(f"  距离差值: {distance_diff:.3f} m")
+            
+            # 分析移动方向
+            if position_diff[0] > 0.05:
+                direction = "向前"
+            elif position_diff[0] < -0.05:
+                direction = "向后"
+            else:
+                direction = "前后平衡"
+            
+            # 检查前方约束
+            if target_ee_cart[0] >= init_ee_cart[0] + 0.05:
+                forward_status = "✅ 满足前方约束"
+            else:
+                forward_status = "❌ 违反前方约束"
+            
+            print(f"  前方约束: {forward_status}")
+                
+            if position_diff[2] > 0.05:
+                height = "升高"
+            elif position_diff[2] < -0.05:
+                height = "降低"
+            else:
+                height = "高度平衡"
+                
+            if position_diff[1] > 0.05:
+                lateral = "向右"
+            elif position_diff[1] < -0.05:
+                lateral = "向左"
+            else:
+                lateral = "左右平衡"
+            
+            print(f"  移动方向: {direction}, {height}, {lateral}")
+            print()
+        
+        # 统计信息
+        all_init_pos = sphere2cart(self.init_start_ee_sphere[env_ids])
+        all_target_pos = sphere2cart(self.ee_goal_sphere[env_ids])
+        all_diffs = all_target_pos - all_init_pos
+        
+        print("📊 统计信息:")
+        print(f"  平均距离差值: {torch.norm(all_diffs, dim=1).mean().item():.3f} m")
+        print(f"  最大距离差值: {torch.norm(all_diffs, dim=1).max().item():.3f} m")
+        print(f"  最小距离差值: {torch.norm(all_diffs, dim=1).min().item():.3f} m")
+        print(f"  X方向平均差值: {all_diffs[:, 0].mean().item():+.3f} m")
+        print(f"  Y方向平均差值: {all_diffs[:, 1].mean().item():+.3f} m")
+        print(f"  Z方向平均差值: {all_diffs[:, 2].mean().item():+.3f} m")
+        
+        # 显示课程进度信息
+        if hasattr(self, 'curriculum_step'):
+            progress = (self.curriculum_step / self.max_curriculum_step) * 100
+            print(f"\n🎓 课程学习信息:")
+            print(f"  当前课程步数: {self.curriculum_step}")
+            print(f"  课程进度: {progress:.1f}%")
+            
+            # 显示当前目标范围
+            curriculum_progress = torch.clamp(torch.tensor(self.curriculum_step / self.max_curriculum_step, device=self.device), 0.0, 1.0)
+            base_l_min, base_l_max = 0.15, 0.25
+            advanced_l_min, advanced_l_max = 0.25, 0.6
+            current_l_min = base_l_min + curriculum_progress * (advanced_l_min - base_l_min)
+            current_l_max = base_l_max + curriculum_progress * (advanced_l_max - base_l_max)
+            print(f"  当前距离范围: {current_l_min:.3f}m - {current_l_max:.3f}m")
+        
+        print("-" * 80)

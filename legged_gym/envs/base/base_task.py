@@ -883,11 +883,6 @@ class BaseTask:
             name = "_reward_" + name
             self.reward_functions.append(getattr(self, name))
 
-        print(f"\n🏆 奖励函数 (共{len(self.reward_names)}个):")
-        for name in self.reward_names:
-            scale = self.reward_scales.get(name, 0)
-            print(f"  ✅ {name}: scale={scale}")
-
         # reward episode sums
         self.episode_sums = {
             name: torch.zeros(

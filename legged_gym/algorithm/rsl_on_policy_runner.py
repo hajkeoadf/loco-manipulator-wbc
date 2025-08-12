@@ -375,12 +375,21 @@ class RSLOnPolicyRunner:
         # 打印训练信息
         str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
 
-        if len(locs["rewbuffer"]) > 0:
+        if len(locs["rewbuffer"]) > 1:
+            # 有足够数据计算标准差
             log_string = (
                 " " * len(str)
                 + f" \033[1m Leg Reward: {statistics.mean(locs['rewbuffer']):.2f} ± {statistics.stdev(locs['rewbuffer']):.2f} \033[0m "
                 + f" \033[1m Arm Reward: {statistics.mean(locs['armrewbuffer']):.2f} ± {statistics.stdev(locs['armrewbuffer']):.2f} \033[0m "
                 + f" \033[1m Episode Length: {statistics.mean(locs['lenbuffer']):.1f} ± {statistics.stdev(locs['lenbuffer']):.1f} \033[0m "
+            )
+        elif len(locs["rewbuffer"]) == 1:
+            # 只有一个数据点，只显示均值
+            log_string = (
+                " " * len(str)
+                + f" \033[1m Leg Reward: {statistics.mean(locs['rewbuffer']):.2f} (single data) \033[0m "
+                + f" \033[1m Arm Reward: {statistics.mean(locs['armrewbuffer']):.2f} (single data) \033[0m "
+                + f" \033[1m Episode Length: {statistics.mean(locs['lenbuffer']):.1f} (single data) \033[0m "
             )
         else:
             log_string = " " * len(str) + " \033[1m No training data \033[0m "

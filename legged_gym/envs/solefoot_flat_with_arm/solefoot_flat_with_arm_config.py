@@ -35,7 +35,7 @@ RESUME = True
 
 class BipedCfgSFWithArm(BipedCfgSF):
     class env:
-        num_envs = 8196
+        num_envs = 10
         num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
         num_critic_observations = 5 + num_observations
         num_height_samples = 187
