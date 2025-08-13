@@ -362,12 +362,48 @@ class BipedSFWithArm(BipedSF):
         init_start_ee_cart[:, 0] = 0.3  # 增加x距离
         init_start_ee_cart[:, 2] = 0.25  # 增加z高度，使起始位置更高
         self.init_start_ee_sphere = cart2sphere(init_start_ee_cart)
+        
+        # 打印末端执行器初始相对位置的球坐标
+        self._print_initial_ee_sphere_coordinates(init_start_ee_cart)
 
     def _resample_ee_goal_sphere_once(self, env_ids):
-        """Resample end-effector goal in spherical coordinates."""
-        self.ee_goal_sphere[env_ids, 0] = torch_rand_float(self.goal_ee_l_ranges[0], self.goal_ee_l_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
-        self.ee_goal_sphere[env_ids, 1] = torch_rand_float(self.goal_ee_p_ranges[0], self.goal_ee_p_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
-        self.ee_goal_sphere[env_ids, 2] = torch_rand_float(self.goal_ee_y_ranges[0], self.goal_ee_y_ranges[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        """Resample end-effector goal in cartesian coordinates and convert to spherical."""
+        # 从配置中读取笛卡尔坐标范围
+        init_x_range = np.array(self.goal_ee_ranges['init_pos_x'])
+        init_y_range = np.array(self.goal_ee_ranges['init_pos_y'])
+        init_z_range = np.array(self.goal_ee_ranges['init_pos_z'])
+        
+        final_x_range = np.array(self.goal_ee_ranges['final_pos_x'])
+        final_y_range = np.array(self.goal_ee_ranges['final_pos_y'])
+        final_z_range = np.array(self.goal_ee_ranges['final_pos_z'])
+        
+        # 根据课程学习进度插值计算当前范围
+        progress = np.clip(self.update_counter / 1000, 0, 1)  # 假设1000步完成课程学习
+        
+        current_x_range = init_x_range + progress * (final_x_range - init_x_range)
+        current_y_range = init_y_range + progress * (final_y_range - init_y_range)
+        current_z_range = init_z_range + progress * (final_z_range - init_z_range)
+        
+        # 生成笛卡尔坐标目标
+        ee_goal_cart = torch.zeros(len(env_ids), 3, device=self.device)
+        ee_goal_cart[:, 0] = torch_rand_float(current_x_range[0], current_x_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        ee_goal_cart[:, 1] = torch_rand_float(current_y_range[0], current_y_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        ee_goal_cart[:, 2] = torch_rand_float(current_z_range[0], current_z_range[1], (len(env_ids), 1), device=self.device).squeeze(1)
+        
+        # 转换为球坐标
+        self.ee_goal_sphere[env_ids] = cart2sphere(ee_goal_cart)
+        
+        # 调试输出（每1000步输出一次）
+        if self.update_counter % 1000 == 0 and len(env_ids) > 0:
+            env_id = env_ids[0]  # 只看第一个环境
+            cart_coord = ee_goal_cart[0].cpu().numpy()
+            sphere_coord = self.ee_goal_sphere[env_id].cpu().numpy()
+            
+            print(f"\n🔄 笛卡尔坐标转球坐标 (步数: {self.update_counter}):")
+            print(f"  笛卡尔坐标: [{cart_coord[0]:.3f}, {cart_coord[1]:.3f}, {cart_coord[2]:.3f}]")
+            print(f"  球坐标: r={sphere_coord[0]:.3f}, θ={np.degrees(sphere_coord[1]):.1f}°, φ={np.degrees(sphere_coord[2]):.1f}°")
+            print(f"  当前范围: X[{current_x_range[0]:.3f}, {current_x_range[1]:.3f}], Y[{current_y_range[0]:.3f}, {current_y_range[1]:.3f}], Z[{current_z_range[0]:.3f}, {current_z_range[1]:.3f}]")
+            print(f"  课程进度: {progress:.2f}")
 
     def _resample_ee_goal_orn_once(self, env_ids):
         """Resample end-effector orientation goal."""
@@ -637,7 +673,7 @@ class BipedSFWithArm(BipedSF):
             self.gym.clear_lines(self.viewer)
             self._draw_debug_vis()
             # 暂时禁用_draw_ee_goal以避免张量维度错误
-            # self._draw_ee_goal()
+            self._draw_ee_goal()
 
     def _debug_arm_motion(self):
         """调试机械臂运动状态"""
@@ -1210,3 +1246,81 @@ class BipedSFWithArm(BipedSF):
             print("❌ 测试失败：机械臂运动幅度过小")
             
         print("="*60)
+
+    def _print_initial_ee_sphere_coordinates(self, init_start_ee_cart):
+        """打印末端执行器初始相对位置的球坐标信息"""
+        print("\n" + "🌐"*60)
+        print("🌐 末端执行器初始球坐标分析")
+        print("🌐"*60)
+        
+        # 计算球坐标
+        sphere_coords = cart2sphere(init_start_ee_cart)
+        
+        # 转换为numpy数组便于显示
+        cart_np = init_start_ee_cart.cpu().numpy()
+        sphere_np = sphere_coords.cpu().numpy()
+        
+        print(f"📊 环境数量: {self.num_envs}")
+        print(f"🔧 机械臂基座偏移: {self.arm_base_overhead.cpu().numpy()}")
+        print(f"📏 Z轴不变偏移: {self.z_invariant_offset[0].cpu().item():.3f} m")
+        
+        print(f"\n📍 笛卡尔坐标 (相对于机器人基座):")
+        print(f"  X范围: [{np.min(cart_np[:, 0]):.3f}, {np.max(cart_np[:, 0]):.3f}] m")
+        print(f"  Y范围: [{np.min(cart_np[:, 1]):.3f}, {np.max(cart_np[:, 1]):.3f}] m")
+        print(f"  Z范围: [{np.min(cart_np[:, 2]):.3f}, {np.max(cart_np[:, 2]):.3f}] m")
+        
+        print(f"\n🌐 球坐标 (相对于机器人基座):")
+        print(f"  半径 (r): [{np.min(sphere_np[:, 0]):.3f}, {np.max(sphere_np[:, 0]):.3f}] m")
+        print(f"  俯仰角 (θ): [{np.degrees(np.min(sphere_np[:, 1])):.1f}°, {np.degrees(np.max(sphere_np[:, 1])):.1f}°]")
+        print(f"  方位角 (φ): [{np.degrees(np.min(sphere_np[:, 2])):.1f}°, {np.degrees(np.max(sphere_np[:, 2])):.1f}°]")
+        
+        # 显示前3个环境的详细信息
+        print(f"\n🔍 前{min(3, self.num_envs)}个环境详情:")
+        for i in range(min(3, self.num_envs)):
+            cart_i = cart_np[i]
+            sphere_i = sphere_np[i]
+            
+            print(f"  环境{i}:")
+            print(f"    笛卡尔坐标: [{cart_i[0]:+.3f}, {cart_i[1]:+.3f}, {cart_i[2]:+.3f}] m")
+            print(f"    球坐标: r={sphere_i[0]:.3f}m, θ={np.degrees(sphere_i[1]):.1f}°, φ={np.degrees(sphere_i[2]):.1f}°")
+            
+            # 计算相对于地面的实际高度
+            actual_height = cart_i[2] + self.z_invariant_offset[0].cpu().item()
+            print(f"    实际高度: {actual_height:.3f} m (相对于地面)")
+            
+            # 判断位置合理性
+            if cart_i[0] > 0:
+                print(f"    ✅ 位置在机器人前方")
+            else:
+                print(f"    ❌ 位置在机器人后方")
+                
+            if cart_i[2] > 0:
+                print(f"    ✅ 位置在机器人基座上方")
+            else:
+                print(f"    ❌ 位置在机器人基座下方")
+        
+        print(f"\n📋 配置参数对比:")
+        print(f"  初始长度范围: {self.init_goal_ee_l_ranges}")
+        print(f"  初始俯仰范围: [{np.degrees(self.init_goal_ee_p_ranges[0]):.1f}°, {np.degrees(self.init_goal_ee_p_ranges[1]):.1f}°]")
+        print(f"  初始偏航范围: [{np.degrees(self.init_goal_ee_y_ranges[0]):.1f}°, {np.degrees(self.init_goal_ee_y_ranges[1]):.1f}°]")
+        
+        # 检查是否在配置范围内
+        all_in_range = True
+        for i in range(self.num_envs):
+            r, theta, phi = sphere_np[i]
+            if not (self.init_goal_ee_l_ranges[0] <= r <= self.init_goal_ee_l_ranges[1]):
+                print(f"  ⚠️  环境{i}: 半径{r:.3f}m超出范围{self.init_goal_ee_l_ranges}")
+                all_in_range = False
+            if not (self.init_goal_ee_p_ranges[0] <= theta <= self.init_goal_ee_p_ranges[1]):
+                print(f"  ⚠️  环境{i}: 俯仰角{np.degrees(theta):.1f}°超出范围[{np.degrees(self.init_goal_ee_p_ranges[0]):.1f}°, {np.degrees(self.init_goal_ee_p_ranges[1]):.1f}°]")
+                all_in_range = False
+            if not (self.init_goal_ee_y_ranges[0] <= phi <= self.init_goal_ee_y_ranges[1]):
+                print(f"  ⚠️  环境{i}: 方位角{np.degrees(phi):.1f}°超出范围[{np.degrees(self.init_goal_ee_y_ranges[0]):.1f}°, {np.degrees(self.init_goal_ee_y_ranges[1]):.1f}°]")
+                all_in_range = False
+        
+        if all_in_range:
+            print(f"  ✅ 所有环境的初始位置都在配置范围内")
+        else:
+            print(f"  ❌ 部分环境的初始位置超出配置范围")
+        
+        print("🌐"*60)

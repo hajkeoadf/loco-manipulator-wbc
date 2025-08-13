@@ -35,7 +35,7 @@ RESUME = True
 
 class BipedCfgSFWithArm(BipedCfgSF):
     class env:
-        num_envs = 8196
+        num_envs = 9
         num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
         num_critic_observations = 5 + num_observations
         num_height_samples = 187
@@ -53,7 +53,7 @@ class BipedCfgSFWithArm(BipedCfgSF):
 
 
     class goal_ee:
-        command_mode = 'cart'  # 'cart' or 'sphere'
+        command_mode = 'sphere'  # 'cart' or 'sphere' - 内部仍使用球坐标系
         traj_time = [2.0, 4.0]  # 轨迹时间范围
         hold_time = [1.0, 2.0]  # 保持时间范围
         collision_lower_limits = [-0.6, -0.6, 0.1]  # 碰撞检测下限 - 提高z下限避免目标过低
@@ -70,12 +70,22 @@ class BipedCfgSFWithArm(BipedCfgSF):
         tracking_ee_reward_schedule = [0, 1]  # 跟踪奖励课程学习
         
         class ranges:
-            init_pos_l = [0.25, 0.4]  # 初始长度范围 - 进一步减小距离，更适合训练初期
-            init_pos_p = [1 * np.pi / 6, 1 * np.pi / 3]  # 初始俯仰范围 - 微调角度范围，避免过于极端的角度
-            init_pos_y = [-1 * np.pi / 8, 1 * np.pi / 8]  # 初始偏航范围 - 减小范围
-            final_pos_l = [0.2, 0.7]  # 最终长度范围
-            final_pos_p = [- 2 * np.pi / 5, 1 * np.pi / 5]  # 最终俯仰范围
-            final_pos_y = [- 3 * np.pi / 5, 3 * np.pi / 5]  # 最终偏航范围
+            # 笛卡尔坐标范围 (相对于机器人基座) - 便于调试
+            init_pos_x = [0.3, 0.3]  # 初始X范围 - 前方距离
+            init_pos_y = [0, 0]  # 初始Y范围 - 横向范围，±5cm
+            init_pos_z = [0.25, 0.25]  # 初始Z范围 - 高度范围
+            init_pos_l = [0.4, 0.8]  # 初始长度范围
+            init_pos_p = [np.pi/6, np.pi/3]  # 初始俯仰范围
+            init_pos_y = [-np.pi/36, np.pi/36]  # 初始偏航范围
+            
+            # 最终位置范围 (相对于机器人基座)
+            final_pos_x = [1.0, 5.0]  # 最终X范围 - 前方距离
+            final_pos_y = [-0.08, 0.08]  # 最终Y范围 - 横向范围，±8cm
+            final_pos_z = [-1.0, 1.0]  # 最终Z范围 - 高度范围
+            final_pos_l = [0.5, 1.0]  # 最终长度范围
+            final_pos_p = [-2*np.pi/5, np.pi/5]  # 最终俯仰范围
+            final_pos_y = [-8*np.pi/180, 8*np.pi/180]  # 最终偏航范围
+            
             final_delta_orn = [[-0, 0], [-0, 0], [-0, 0]]  # 最终姿态变化范围
             final_tracking_ee_reward = 1.0  # 最终跟踪奖励
 
