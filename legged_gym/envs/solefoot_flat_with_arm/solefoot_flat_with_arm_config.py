@@ -35,7 +35,7 @@ RESUME = True
 
 class BipedCfgSFWithArm(BipedCfgSF):
     class env:
-        num_envs = 9
+        num_envs = 4096
         num_observations = 3 + 3 + 14 + 14 + 14 + 1 + 1 + 4 + 5 + 6  
         num_critic_observations = 5 + num_observations
         num_height_samples = 187
@@ -50,6 +50,18 @@ class BipedCfgSFWithArm(BipedCfgSF):
         fail_to_terminal_time_s = 0.5
         action_delay = 0  # 动作延迟
         observe_priv = True  # 是否使用privileged observations
+
+        class dog:
+            dog_num_observations = 3 + 3 + 8 + 8 + 8 + 1 + 1 + 4 + 5 
+            dog_num_privileged_obs = 5
+            dog_num_obs_history = 10
+            dog_num_actions = 8
+
+        class arm:
+            arm_num_observations = 6 + 6 + 6 + 6
+            arm_num_privileged_obs = 5
+            arm_num_obs_history = 10
+            arm_num_actions = 6
 
 
     class goal_ee:
@@ -71,15 +83,15 @@ class BipedCfgSFWithArm(BipedCfgSF):
         
         class ranges:
             # 笛卡尔坐标范围 (相对于机器人基座) - 便于调试
-            init_pos_x = [0.3, 0.3]  # 初始X范围 - 前方距离
+            init_pos_x = [0.6, 0.8]  # 初始X范围 - 前方距离
             init_pos_y = [0, 0]  # 初始Y范围 - 横向范围，±5cm
-            init_pos_z = [0.25, 0.25]  # 初始Z范围 - 高度范围
+            init_pos_z = [0.35, 0.35]  # 初始Z范围 - 高度范围
             init_pos_l = [0.4, 0.8]  # 初始长度范围
             init_pos_p = [np.pi/6, np.pi/3]  # 初始俯仰范围
             init_pos_y = [-np.pi/36, np.pi/36]  # 初始偏航范围
             
             # 最终位置范围 (相对于机器人基座)
-            final_pos_x = [1.0, 5.0]  # 最终X范围 - 前方距离
+            final_pos_x = [0.8, 1.8]  # 最终X范围 - 前方距离
             final_pos_y = [-0.08, 0.08]  # 最终Y范围 - 横向范围，±8cm
             final_pos_z = [-1.0, 1.0]  # 最终Z范围 - 高度范围
             final_pos_l = [0.5, 1.0]  # 最终长度范围
@@ -245,21 +257,21 @@ class BipedCfgSFWithArm(BipedCfgSF):
     class rewards:
         class scales:
             # 腿部奖励
-            keep_balance = 1.0
+            keep_balance = 3.0
             tracking_lin_vel_x = 1.5
             tracking_lin_vel_y = 1.5
             tracking_ang_vel = 1
-            base_height = -2.0  # 从 -10 减少到 -2.0
+            base_height = -10.0  # 从 -10 减少到 -2.0
             lin_vel_z = -0.5
             ang_vel_xy = -0.05
             torques = -0.00008
             dof_acc = -2.5e-7
             action_rate = -0.01
             dof_pos_limits = -2.0
-            collision = -10.0  # 从 -100 减少到 -10.0
+            collision = -100.0  
             action_smooth = -0.01
             orientation = -0.5  # 从 -1.0 减少到 -0.5
-            feet_distance = -10.0  # 从 -100 减少到 -10.0
+            feet_distance = -100.0  
             feet_regulation = -0.05
             tracking_contacts_shaped_force = -2.0
             tracking_contacts_shaped_vel = -2.0
@@ -273,9 +285,9 @@ class BipedCfgSFWithArm(BipedCfgSF):
             foot_landing_vel = -10.0
             
             # 机械臂奖励 - 大幅增加权重以鼓励运动
-            tracking_ee_cart = 5.0  # 大幅增加跟踪奖励
-            tracking_ee_sphere = 5.0  # 大幅增加跟踪奖励
-            tracking_ee_orn = 2.0  # 增加姿态跟踪奖励
+            tracking_ee_cart = 0.5  # 大幅增加跟踪奖励
+            tracking_ee_sphere = 0.5  # 大幅增加跟踪奖励
+            tracking_ee_orn = 0.3  # 增加姿态跟踪奖励
             arm_energy_abs_sum = -0.00005  # 减少能量惩罚，鼓励更多运动
 
         only_positive_rewards = False

@@ -59,7 +59,7 @@ class RSLPPO:
                  torque_supervision=True,
                  torque_supervision_schedule=[0.1, 1000, 1000],
                  adaptive_arm_gains=True,
-                 min_policy_std=None,
+                 min_policy_std=[[0.15, 0.25, 0.25, 0.20] * 2 + [0.2] * 3 + [0.05] * 3],
                  dagger_update_freq=20,
                  priv_reg_coef_schedule=[0, 0, 0],
                  ):
@@ -94,7 +94,7 @@ class RSLPPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
-        self.min_policy_std = torch.tensor(min_policy_std, device=self.device) if min_policy_std is not None else None
+        self.min_policy_std = torch.tensor(min_policy_std, device=self.device)
 
         self.mixing_schedule = mixing_schedule
         self.torque_supervision = torque_supervision
@@ -198,7 +198,7 @@ class RSLPPO:
                 if kl_mean > self.desired_kl * 2.0:
                     self.learning_rate = max(1e-5, self.learning_rate / 1.5)
                 elif kl_mean < self.desired_kl * 0.5:
-                    self.learning_rate = min(1e-1, self.learning_rate * 1.5)
+                    self.learning_rate = min(1e-2, self.learning_rate * 1.5)
 
                 for param_group in self.optimizer.param_groups:
                     param_group['lr'] = self.learning_rate
@@ -264,6 +264,7 @@ class RSLPPO:
 
         self.storage.clear()
         self.update_counter()
+        self.enforce_min_std()
 
         return mean_value_loss, mean_surrogate_loss, mean_entropy_loss, mean_torque_supervision_loss, mean_priv_reg_loss, priv_reg_coef
 
@@ -301,8 +302,9 @@ class RSLPPO:
 
     def enforce_min_std(self):
         """Enforce minimum policy standard deviation"""
-        if self.min_policy_std is not None:
-            self.actor_critic.actor.log_std.data.clamp_(min=torch.log(self.min_policy_std))
+        current_std = self.actor_critic.actor.log_std.detach().squeeze()
+        new_std = torch.max(current_std, self.min_policy_std).detach().squeeze()
+        self.actor_critic.actor.log_std.data.clamp_(min=torch.log(new_std))
 
     def update_counter(self):
         """Update training counter"""

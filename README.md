@@ -41,7 +41,7 @@
      - --seed SEED:  Random seed.
      - --max_iterations MAX_ITERATIONS:  Maximum number of training iterations.
 2. Play a trained policy:  
-  ```python legged_gym/scripts/play.py --task=pointfoot_flat --load_run your_model_path --checkpoint your_checkpoint```
+  ```python legged_gym/scripts/play.py --task=solefoot_flat_with_arm --load_run your_model_path --checkpoint your_checkpoint```
     - `load_run` is the folder name which contains your training results, for example `Apr18_15-48-46_`
     - `checkpoint` is the number of training iteration, for example the checkpoint of `model_10000.pt` is 10000.
 

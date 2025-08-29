@@ -544,8 +544,26 @@ class BipedSF(BaseTask):
             self.base_lin_vel * self.obs_scales.lin_vel, 
             obs_buf
         ), dim=-1)
+
+        arm_obs_buf = torch.cat((
+            (self.dof_pos[:, 8:14] - self.default_dof_pos[:,8:14]) * self.obs_scales.dof_pos,
+            self.dof_vel[:, 8:14] * self.obs_scales.dof_vel,
+            self.actions[:, 8:14]
+        ), dim=-1)
+
+        dog_obs_buf = torch.cat((
+            self.base_ang_vel * self.obs_scales.ang_vel, # base_ang_vel 是base的角速度, 3维
+            self.projected_gravity, # 映射的重力, 3维
+            (self.dof_pos[:, 0:8] - self.default_dof_pos[:,0:8]) * self.obs_scales.dof_pos, # dof_pos是关节位置, 14维
+            self.dof_vel[:, 0:8] * self.obs_scales.dof_vel, 
+            self.commands[:, :5] * self.commands_scale, # 命令, 5维
+            self.actions[:, 0:8], 
+            self.clock_inputs_sin.view(self.num_envs, 1), # 时钟, 1维   
+            self.clock_inputs_cos.view(self.num_envs, 1), # 时钟, 1维
+            self.gaits, # 步态, 4维
+        ), dim=-1)
         
-        return obs_buf, critic_obs_buf
+        return obs_buf, critic_obs_buf, arm_obs_buf, dog_obs_buf
 
     def get_observations(self):
         return (
@@ -643,22 +661,6 @@ class BipedSF(BaseTask):
                 Args:
                     env_ids (List[int]): Environments ids for which new commands are needed
                 """
-        # self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][1]
-        #                              - self.command_ranges["lin_vel_x"][0]) \
-        #                             * torch.rand(len(env_ids), device=self.device) \
-        #                             + self.command_ranges["lin_vel_x"][0]
-        # self.commands[env_ids, 1] = (self.command_ranges["lin_vel_y"][1]
-        #                              - self.command_ranges["lin_vel_y"][0]) \
-        #                             * torch.rand(len(env_ids), device=self.device) \
-        #                             + self.command_ranges["lin_vel_y"][0]
-        # self.commands[env_ids, 2] = (self.command_ranges["ang_vel_yaw"][1]
-        #                              - self.command_ranges["ang_vel_yaw"][0]) \
-        #                             * torch.rand(len(env_ids), device=self.device) \
-        #                             + self.command_ranges["ang_vel_yaw"][0]
-        # self.commands[env_ids, 3] = (self.command_ranges["base_height"][1]
-        #                              - self.command_ranges["base_height"][0]) \
-        #                             * torch.rand(len(env_ids), device=self.device) \
-        #                             + self.command_ranges["base_height"][0]
         self.commands[env_ids, 0] = (self.command_ranges["lin_vel_x"][env_ids, 1]
                                      - self.command_ranges["lin_vel_x"][env_ids, 0]) \
                                     * torch.rand(len(env_ids), device=self.device) \
@@ -744,6 +746,20 @@ class BipedSF(BaseTask):
         
         # 重新设置num_obs为实际观测维度（包含高度测量）
         self.num_obs = self.cfg.env.num_observations
+
+        self.arm_obs_buf = torch.zeros(
+            self.num_envs,
+            self.cfg.env.arm_num_observations,
+            device=self.device,
+            dtype=torch.float,
+        )
+
+        self.dog_obs_buf = torch.zeros(
+            self.num_envs,
+            self.cfg.env.dog_num_observations,
+            device=self.device,
+            dtype=torch.float,
+        )
         
         # 重新初始化obs_history为正确的维度
         self.obs_history = torch.zeros(
@@ -945,54 +961,9 @@ class BipedSF(BaseTask):
         return reward
 
     def _reward_orientation(self):
-        """Multi-objective orientation reward balancing stability and reachability."""
-        # 获取目标信息
-        target_ee_local = self.curr_ee_goal_cart
-        target_distance = torch.norm(target_ee_local, dim=-1)
-        
-        # 获取当前姿态
-        gravity_x = self.projected_gravity[:, 0]
-        gravity_y = self.projected_gravity[:, 1]
-        
-        # 计算稳定性奖励（保持水平）
-        stability_reward = -(gravity_x ** 2 + gravity_y ** 2)
-        
-        # 计算可达性奖励（允许适度倾斜）
-        reachability_reward = torch.zeros_like(stability_reward)
-        
-        # 根据目标方向计算理想倾斜
-        target_direction = target_ee_local / (target_distance.unsqueeze(-1) + 1e-6)
-        
-        # 计算理想倾斜角度（基于目标方向）
-        ideal_tilt_x = -target_direction[:, 0] * 0.25  # 前倾/后倾
-        ideal_tilt_y = -target_direction[:, 1] * 0.25  # 左倾/右倾
-        
-        # 计算可达性误差
-        reachability_error = torch.sum(torch.square(torch.stack([
-            gravity_x - ideal_tilt_x,
-            gravity_y - ideal_tilt_y
-        ], dim=-1)), dim=-1)
-        
-        reachability_reward = -reachability_error
-        
-        # 根据任务难度调整权重
-        task_difficulty = torch.clamp(target_distance / 0.4, 0.0, 1.0)
-        
-        # 简单任务：更重视稳定性
-        # 困难任务：更重视可达性
-        stability_weight = 1.0 - 0.5 * task_difficulty
-        reachability_weight = 0.5 * task_difficulty
-        
-        # 组合奖励
-        combined_reward = (stability_weight * stability_reward + 
-                        reachability_weight * reachability_reward)
-        
-        # 添加安全限制
-        max_safe_tilt = 0.4
-        unsafe_tilt = torch.clamp(torch.abs(torch.stack([gravity_x, gravity_y], dim=-1)) - max_safe_tilt, min=0.0)
-        safety_penalty = 10.0 * torch.sum(unsafe_tilt, dim=-1)
-        
-        return combined_reward - safety_penalty
+        # Penalize non flat base orientation
+        reward = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+        return reward
 
     def _reward_ankle_torque_limits(self):
         torque_limit = torch.cat((self.torque_limits[3].view(1) * self.cfg.rewards.soft_torque_limit,
