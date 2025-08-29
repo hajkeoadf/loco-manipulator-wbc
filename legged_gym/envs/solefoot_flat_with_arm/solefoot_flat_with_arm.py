@@ -584,7 +584,7 @@ class BipedSFWithArm(BipedSF):
         self.obs_buf = obs_buf
         self.critic_obs_buf = obs_buf   
 
-        arm_noise, dog_noise = self._get_arm_dog_noise_scale_vec(self.cfg)
+        # arm_noise, dog_noise = self._get_arm_dog_noise_scale_vec(self.cfg)
         self.arm_obs_buf = torch.cat([arm_obs_buf, arm_obs], dim=-1)
         self.dog_obs_buf = dog_obs_buf
 

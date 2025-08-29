@@ -325,6 +325,17 @@ class RSLOnPolicyRunner:
             "Loss/priv_reg_loss", locs["mean_priv_reg_loss"], locs["it"]
         )
         self.writer.add_scalar("Loss/mean_hist_latent_loss", locs["mean_hist_latent_loss"], locs["it"])
+        
+        # 计算并记录总的loss
+        total_loss = (locs["mean_value_loss"] + 
+                      locs["mean_surrogate_loss"] + 
+                      locs["mean_entropy_loss"] + 
+                      locs["mean_torque_supervision_loss"] + 
+                      locs["mean_priv_reg_loss"] + 
+                      locs["mean_hist_latent_loss"])
+        
+        self.writer.add_scalar("Loss/total", total_loss, locs["it"])
+        
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
         
         # 记录课程学习参数

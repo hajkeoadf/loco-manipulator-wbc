@@ -747,19 +747,19 @@ class BipedSF(BaseTask):
         # 重新设置num_obs为实际观测维度（包含高度测量）
         self.num_obs = self.cfg.env.num_observations
 
-        self.arm_obs_buf = torch.zeros(
-            self.num_envs,
-            self.cfg.env.arm_num_observations,
-            device=self.device,
-            dtype=torch.float,
-        )
+        # self.arm_obs_buf = torch.zeros(
+        #     self.num_envs,
+        #     self.cfg.env.arm_num_observations,
+        #     device=self.device,
+        #     dtype=torch.float,
+        # )
 
-        self.dog_obs_buf = torch.zeros(
-            self.num_envs,
-            self.cfg.env.dog_num_observations,
-            device=self.device,
-            dtype=torch.float,
-        )
+        # self.dog_obs_buf = torch.zeros(
+        #     self.num_envs,
+        #     self.cfg.env.dog_num_observations,
+        #     device=self.device,
+        #     dtype=torch.float,
+        # )
         
         # 重新初始化obs_history为正确的维度
         self.obs_history = torch.zeros(
